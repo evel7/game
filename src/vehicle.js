@@ -79,7 +79,7 @@ export class Vehicle {
     const beta = spd > 3 ? Math.atan2(v, Math.max(Math.abs(u), 0.5)) : 0;
     // «намерение дрифтить»: ручник или пинок сцеплением запускают занос; пока держишь угол с газом — намерение сохраняется.
     // Без намерения (в лёгком режиме) машина на скорости сама стабилизируется и не уходит в занос случайно.
-    if (input.handbrake > 0.3 || this.kickT > 0) this.intent = 1.6;
+    if (input.handbrake > 0.3 || this.kickT > 0) this.intent = 1.1;
     else if (Math.abs(beta) > 0.2 && input.throttle > 0.3 && (this.intent || 0) > 0) this.intent = Math.max(this.intent, 0.6);
     else if (u < 12) this.intent = Math.max(this.intent || 0, 0.3); // на малой скорости всегда можно покрутить «пончики»
     this.intent = Math.max(0, (this.intent || 0) - dt);
@@ -143,7 +143,7 @@ export class Vehicle {
 
     let engineT = this.torqueAt(Math.max(this.rpm, s.idle)) * throttle * (limiter ? 0.1 : 1);
     if (throttle < 0.05 && Math.abs(u) > 1) engineT = -s.torque * 0.12 * clamp(this.rpm / s.redline, 0, 1); // торможение двигателем
-    let driveF = engineT * ratio * 0.88 / s.wheelRadius * (this.kickT > 0 ? 1.9 : 1);
+    let driveF = engineT * ratio * 0.88 / s.wheelRadius * (this.kickT > 0 ? 1.5 : 1);
     if (this.gear === -1) {
       driveF = -Math.abs(driveF);
       if (u < -9) driveF = 0; // ограничение скорости назад
@@ -190,7 +190,7 @@ export class Vehicle {
     // ручник: блокирует задние колёса
     var hb = input.handbrake;
     if (hb > 0 && Math.abs(u) > 0.5) {
-      FxR = -sign(u) * FmaxR * 0.95 * hb + FxR * (1 - hb);
+      FxR = -sign(u) * FmaxR * 0.8 * hb + FxR * (1 - hb);
     }
 
     // трекшн-контроль на прямой: при старте и разгоне без руля колёса не буксуют впустую.
@@ -228,7 +228,7 @@ export class Vehicle {
 
     const capF = FmaxF * Math.sqrt(Math.max(0.04, 1 - 0.85 * Math.pow(FxF / FmaxF, 2)));
     let capR = FmaxR * Math.sqrt(Math.max(0.04, 1 - 0.85 * Math.pow(FxR / FmaxR, 2)));
-    if (this.lockR > 0) capR *= 1 - 0.45 * this.lockR; // заблокированное колесо держит хуже
+    if (this.lockR > 0) capR *= 1 - 0.3 * this.lockR; // заблокированное колесо держит хуже
 
     let FyF = -FmaxF * Math.sin(C * Math.atan(B * alphaF));
     let FyR = -FmaxR * Math.sin(C * Math.atan(B * alphaR));
@@ -270,7 +270,7 @@ export class Vehicle {
     // помощь при перекладке заноса (левый дрифт → правый): если руль повёрнут против текущего вращения,
     // добавляем немного момента в сторону руля — машина охотно «перекидывается», как в аркадных дрифт-играх
     if (opts.assist > 0 && u > 5 && Math.abs(input.steer) > 0.3 && Math.sign(input.steer) !== Math.sign(this.r) && (Math.abs(beta) > 0.12 || this.rearSlide > 0.4)) {
-      this.r += input.steer * 3.2 * dt * opts.assist * Math.min(1, u / 15);
+      this.r += input.steer * 2.3 * dt * opts.assist * Math.min(1, u / 15);
     }
     const drifting = Math.abs(beta) > 0.15;
     // как в FR Legends: в управляемом заносе с газом машина почти не теряет скорость
@@ -278,7 +278,7 @@ export class Vehicle {
       const k = 3.2 * opts.assist * throttle * dt / spd;
       this.vx += this.vx * k; this.vz += this.vz * k;
     }
-    this.r *= 1 - Math.min(0.5, (s.yawDamp ?? 0.6) * (drifting ? 0.4 : 1) * dt); // лёгкое демпфирование
+    this.r *= 1 - Math.min(0.5, (s.yawDamp ?? 0.6) * (drifting ? 0.8 : 1) * dt); // лёгкое демпфирование
     // стабилизация на скорости в лёгком режиме: гасим резкие «виляния», если не в заносе
     if (calm && u > 12) {
       const rTarget = u * Math.tan(this.steer) / this.L * 0.95;
@@ -297,6 +297,12 @@ export class Vehicle {
     }
     // стабилизация «помощника»: не даём закрутиться волчком
     if (opts.assist > 0 && Math.abs(beta) > 1.05 && u > 2) this.r *= 1 - 2.5 * dt * opts.assist;
+    // ограничитель угла заноса: занос мягче и не «перекручивается» (угол ~до 35°)
+    if (opts.assist > 0 && Math.abs(beta) > 0.5 && u > 4) {
+      const over = Math.abs(beta) - 0.5;
+      // гасим вращение, которое увеличивает угол заноса
+      if (Math.sign(this.r) !== Math.sign(beta)) this.r *= 1 - Math.min(0.6, over * 9 * dt * opts.assist * (opts.easy ? 1.4 : 1));
+    }
 
     this.h += this.r * dt;
     this.x += this.vx * dt;

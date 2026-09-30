@@ -49,13 +49,39 @@ export class GameAudio {
     const rg = ctx.createGain(); rg.gain.value = 0.15; this.rumble.connect(rg); rg.connect(mix.gain); this.rumble.start();
     mix.connect(shaper); shaper.connect(this.engFilter); this.engFilter.connect(this.engGain); this.engGain.connect(this.sfx);
 
-    // --- визг шин ---
-    this.tireSrc = this.loopNoise();
-    const bp1 = ctx.createBiquadFilter(); bp1.type = 'bandpass'; bp1.frequency.value = 750; bp1.Q.value = 3;
-    const bp2 = ctx.createBiquadFilter(); bp2.type = 'lowpass'; bp2.frequency.value = 500; bp2.Q.value = 0.7;
+    // --- звук дрифта: тональный «визг» резины + мягкий шорох ---
+    // Раньше был чистый шум в полосе мотора (~700 Гц) -> смешивался с мотором в «кашу».
+    // Теперь: тон 1.0-1.6 кГц (выше мотора) с живой «дрожью» высоты + немного
+    // высокочастотного шороха, всё через мягкий фильтр, без резкого шипения.
     this.tireGain = ctx.createGain(); this.tireGain.gain.value = 0;
-    this.tireSrc.connect(bp1); this.tireSrc.connect(bp2); bp1.connect(this.tireGain); bp2.connect(this.tireGain); this.tireGain.connect(this.sfx);
-    this.tireBp = bp1;
+    const tireLp = ctx.createBiquadFilter(); tireLp.type = 'lowpass'; tireLp.frequency.value = 3200; tireLp.Q.value = 0.5;
+    const tireHp = ctx.createBiquadFilter(); tireHp.type = 'highpass'; tireHp.frequency.value = 700; tireHp.Q.value = 0.5;
+    this.tireGain.connect(tireHp); tireHp.connect(tireLp); tireLp.connect(this.sfx);
+    const sq = ctx.createGain(); sq.gain.value = 1; sq.connect(this.tireGain);
+    this.sqOscs = [
+      { o: ctx.createOscillator(), type: 'triangle', mul: 1, g: 0.55 },
+      { o: ctx.createOscillator(), type: 'sine', mul: 1.5, g: 0.22 },
+      { o: ctx.createOscillator(), type: 'triangle', mul: 1.012, g: 0.3 },
+    ];
+    // «дрожь» высоты (как у настоящей резины): два медленных LFO + отфильтрованный шум
+    const wob = ctx.createGain(); wob.gain.value = 38;
+    const l1 = ctx.createOscillator(); l1.frequency.value = 6.3; l1.start();
+    const l2 = ctx.createOscillator(); l2.frequency.value = 11.7; l2.start();
+    const l2g = ctx.createGain(); l2g.gain.value = 0.6; l1.connect(wob); l2.connect(l2g); l2g.connect(wob);
+    const wn = this.loopNoise(); const wnl = ctx.createBiquadFilter(); wnl.type = 'lowpass'; wnl.frequency.value = 18;
+    const wng = ctx.createGain(); wng.gain.value = 3; wn.connect(wnl); wnl.connect(wng); wng.connect(wob);
+    for (const s of this.sqOscs) {
+      s.o.type = s.type; s.o.frequency.value = 1150 * s.mul;
+      wob.connect(s.o.frequency);
+      const g = ctx.createGain(); g.gain.value = s.g * 0.5; s.o.connect(g); g.connect(sq); s.o.start();
+    }
+    // амплитудная «рябь», чтобы визг не был ровным свистом
+    const am = this.loopNoise(); const aml = ctx.createBiquadFilter(); aml.type = 'lowpass'; aml.frequency.value = 25;
+    const amg = ctx.createGain(); amg.gain.value = 1.2; am.connect(aml); aml.connect(amg); amg.connect(sq.gain);
+    // шорох резины по асфальту (тихий, выше полосы мотора)
+    this.tireSrc = this.loopNoise();
+    const sc = ctx.createBiquadFilter(); sc.type = 'bandpass'; sc.frequency.value = 2200; sc.Q.value = 0.8;
+    const scg = ctx.createGain(); scg.gain.value = 0.35; this.tireSrc.connect(sc); sc.connect(scg); scg.connect(this.tireGain);
     // --- шорох гравия / снега (съезд с трассы) ---
     this.gravelSrc = this.loopNoise();
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900;
@@ -97,10 +123,14 @@ export class GameAudio {
     this.rumble.frequency.setTargetAtTime(8 + rpm / 400, t, 0.05);
     const load = 0.35 + 0.65 * throttle;
     this.engFilter.frequency.setTargetAtTime(220 + rpm * 0.22 * load + throttle * 500, t, 0.04);
-    this.engGain.gain.setTargetAtTime(0.1 + 0.08 * load, t, 0.05);
-    const sl = Math.min(1, slip) * (offroad ? 0.3 : 1) * Math.min(1, speed / 6);
-    this.tireGain.gain.setTargetAtTime(sl * 0.08, t, 0.12);
-    this.tireBp.frequency.setTargetAtTime(650 + sl * 250, t, 0.15);
+    const sl0 = Math.min(1, slip) * (offroad ? 0 : 1) * Math.min(1, speed / 6);
+    // мягкий порог: лёгкое скольжение не пищит, в заносе звук плавно нарастает
+    const sl = Math.max(0, (sl0 - 0.15) / 0.85); const sq = sl * sl * (3 - 2 * sl);
+    // в заносе мотор чуть приглушается, чтобы визг и мотор не спорили
+    this.engGain.gain.setTargetAtTime((0.1 + 0.08 * load) * (1 - 0.22 * sq), t, 0.05);
+    this.tireGain.gain.setTargetAtTime(sq * 0.07, t, 0.18);
+    const pf = 1000 + sq * 350 + Math.min(1, speed / 50) * 120;
+    for (const s of this.sqOscs) s.o.frequency.setTargetAtTime(pf * s.mul, t, 0.25);
     this.gravelGain.gain.setTargetAtTime(offroad ? Math.min(0.18, speed / 90) : 0, t, 0.08);
     this.windGain.gain.setTargetAtTime(Math.min(0.12, (speed / 70) ** 2 * 0.12), t, 0.15);
   }
