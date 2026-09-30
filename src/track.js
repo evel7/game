@@ -48,7 +48,7 @@ export class Track {
     };
     const dir0 = r() < 0.5 ? 1 : -1;
     const roll = r();
-    if (roll < 0.14) {
+    if (roll < 0.2) {
       return straight(t.straight[0] + r() * (t.straight[1] - t.straight[0]));
     }
     if (roll < 0.32) {
@@ -59,9 +59,9 @@ export class Track {
       this.queue = [straight(4 + r() * 18), c2.seg];
       return c1.seg;
     }
-    if (roll < 0.44) {
+    if (roll < 0.4) {
       // шпилька: крутой длинный поворот
-      return curve(t.minR * (0.8 + r() * 0.4), 1.3 + r() * 0.9, dir0, g.h).seg;
+      return curve(t.minR * (1.0 + r() * 0.4), 1.1 + r() * 0.7, dir0, g.h).seg;
     }
     if (roll < 0.54) {
       // «сжимающийся» поворот: сначала пологий, потом крутой в ту же сторону
@@ -232,6 +232,41 @@ export class Track {
     this.gateMatCP = new THREE.MeshBasicMaterial({ map: gateTex('ЧЕКПОИНТ'), side: THREE.DoubleSide });
     this.gateMatStart = new THREE.MeshBasicMaterial({ map: gateTex('СТАРТ'), side: THREE.DoubleSide });
     this.pillarMat = new THREE.MeshStandardMaterial({ color: 0x222228, roughness: 0.6 });
+    // атлас рекламных баннеров (придуманные спонсоры)
+    const SP = [['ASMAN OIL', '#ffd400', '#111'], ['NITRO-X', '#111', '#39ff14'], ['ТУРБО KG', '#d62828', '#fff'], ['DRIFT LAB', '#fff', '#111'],
+      ['TOKMOK TIRES', '#111', '#ffcc00'], ['ALA-TOO', '#1d3f8f', '#fff'], ['KAZE WORKS', '#f2f2f2', '#d62828'], ['BISHKEK MS', '#00a86b', '#fff']];
+    this.bannerRows = SP.length;
+    const atlas = canvasTexture(512, 512, (c, w, h) => {
+      SP.forEach(([t, bg, fg], k) => {
+        const y = k * 64;
+        c.fillStyle = bg; c.fillRect(0, y, w, 64);
+        c.fillStyle = fg; c.fillRect(0, y, w, 4); c.fillRect(0, y + 60, w, 4);
+        c.font = 'italic 900 42px Arial'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(t, w / 2, y + 34);
+      });
+    });
+    atlas.wrapS = THREE.RepeatWrapping;
+    this.bannerMat = new THREE.MeshLambertMaterial({ map: atlas, side: THREE.DoubleSide });
+    // трибуны со зрителями
+    const crowd = canvasTexture(512, 128, (c, w, h) => {
+      c.fillStyle = '#3a3d46'; c.fillRect(0, 0, w, h);
+      const rnd = mulberry32(77);
+      const cols = ['#e63946', '#f1faee', '#457b9d', '#ffb703', '#2a9d8f', '#fb8500', '#8338ec', '#ffffff', '#111111'];
+      for (let row = 0; row < 5; row++) {
+        const y = 14 + row * 23;
+        c.fillStyle = '#2b2d34'; c.fillRect(0, y + 12, w, 11);
+        for (let x = 4; x < w; x += 9 + rnd() * 4) {
+          if (rnd() < 0.12) continue;
+          c.fillStyle = cols[Math.floor(rnd() * cols.length)]; c.fillRect(x, y + 2, 7, 11);
+          c.fillStyle = ['#f1c27d', '#c68642', '#8d5524', '#ffdbac'][Math.floor(rnd() * 4)];
+          c.beginPath(); c.arc(x + 3.5, y - 1, 3.2, 0, Math.PI * 2); c.fill();
+          if (rnd() < 0.15) { c.fillStyle = '#ffd400'; c.fillRect(x + 5, y - 9, 2, 8); }
+        }
+      }
+    }, { repeat: true });
+    crowd.repeat.set(3, 1);
+    this.standMats = [crowd, crowd].map((t) => new THREE.MeshLambertMaterial({ map: t }));
+    this.standGrey = new THREE.MeshLambertMaterial({ color: 0x6b6f78 });
+    this.roofMat = new THREE.MeshLambertMaterial({ color: 0xd62828 });
 
     if (m.id === 'city') {
       this.buildingMats = [0, 1, 2].map((v) => {
@@ -365,12 +400,13 @@ export class Track {
     }
 
     this.buildBarriers(grp, i0, i1);
+    this.buildBanners(grp, c, i0, i1);
     this.buildProps(grp, c, i0, i1);
 
     // ворота чекпоинтов и старта
     for (let i = i0; i < i1; i++) {
-      if (i === 28) this.buildGate(grp, i, this.gateMatStart);
-      if (i >= CP_FIRST && (i - CP_FIRST) % CP_EVERY === 0) this.buildGate(grp, i, this.gateMatCP);
+      if (i === 28) { this.buildGate(grp, i, this.gateMatStart); this.buildStands(grp, i + 12); }
+      if (i >= CP_FIRST && (i - CP_FIRST) % CP_EVERY === 0) { this.buildGate(grp, i, this.gateMatCP); this.buildStands(grp, i - 14); }
     }
 
     this.root.add(grp);
@@ -492,12 +528,12 @@ export class Track {
       grp.add(im);
     };
     if (m.id === 'desert') {
-      place('cactus', 12, this.wall + 3, 70, 0.8, 1.5);
-      place('bush', 16, this.wall + 2, 60, 0.7, 1.6, 2, false);
+      place('cactus', 8, this.wall + 3, 70, 0.8, 1.5);
+      place('bush', 8, this.wall + 2, 60, 0.7, 1.6, 2, false);
       place('rock', 8, this.wall + 4, 110, 0.6, 3.2);
       if (rnd() < 0.8) place('mesa', 1, 150, 240, 0.7, 1.7, 60, false);
     } else if (m.id === 'snow') {
-      place('pine', 34, this.wall + 3, 110, 0.8, 1.6);
+      place('pine', 22, this.wall + 3, 110, 0.8, 1.6);
       place('rock', 6, this.wall + 3, 80, 0.6, 2.2);
       if (rnd() < 0.9) place('peak', 1, 170, 250, 0.8, 1.8, 90, false);
     } else if (m.id === 'city') {
@@ -570,6 +606,59 @@ export class Track {
       const pm = new THREE.InstancedMesh(pg, this.poolMat, pools.length);
       pools.forEach((p, k) => pm.setMatrixAt(k, new THREE.Matrix4().makeTranslation(p.x, p.y, p.z)));
       pm.renderOrder = 1; grp.add(pm);
+    }
+  }
+
+  // рекламные баннеры над отбойниками — вся партия чанка одним мешем (один вызов отрисовки)
+  buildBanners(grp, c, i0, i1) {
+    const rnd = mulberry32(this.seed * 31 + c * 101);
+    const topH = { tires: 1.1, rail: 0.85, concrete: 0.9 }[this.map.barrier];
+    const pos = [], uv = [], idx = [];
+    const rows = this.bannerRows;
+    for (let i = i0; i + 3 <= i1; i += 4) {
+      if (rnd() < 0.45) continue;
+      const side = rnd() < 0.5 ? 1 : -1;
+      const row = Math.floor(rnd() * rows);
+      const v0 = 1 - (row + 1) / rows, v1 = 1 - row / rows;
+      const off = side * (this.wall + 0.05);
+      const base = pos.length / 3;
+      for (let k = 0; k <= 3; k++) {
+        const p = this.P(i + k);
+        const x = p.x + p.lx * off, z = p.z + p.lz * off;
+        pos.push(x, p.y + topH, z, x, p.y + topH + 0.75, z);
+        const u = side > 0 ? k / 3 : 1 - k / 3;
+        uv.push(u, v0, u, v1);
+      }
+      for (let k = 0; k < 3; k++) { const a = base + k * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
+    }
+    if (!pos.length) return;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setIndex(idx); g.computeVertexNormals();
+    grp.add(new THREE.Mesh(g, this.bannerMat));
+  }
+
+  // трибуны со зрителями по обе стороны трассы
+  buildStands(grp, i) {
+    const p = this.P(i);
+    for (const s of [1, -1]) {
+      const off = s * (this.wall + 7.5);
+      const x = p.x + p.lx * off, z = p.z + p.lz * off;
+      if (!this.clearOfRoad(x, z, i, 5.5)) continue;
+      const mats = [this.standGrey, this.standGrey, this.standGrey, this.standGrey, this.standGrey, this.standGrey];
+      mats[s > 0 ? 1 : 0] = this.standMats[0];
+      const stand = new THREE.Mesh(new THREE.BoxGeometry(8, 5, 34), mats);
+      stand.position.set(x, p.y + 2.5, z); stand.rotation.y = p.h; stand.castShadow = true;
+      grp.add(stand);
+      const roof = new THREE.Mesh(new THREE.BoxGeometry(9.5, 0.3, 35), this.roofMat);
+      roof.position.set(x - p.lx * s * 0.6, p.y + 7.2, z - p.lz * s * 0.6); roof.rotation.y = p.h; roof.rotation.z = s * 0.08;
+      grp.add(roof);
+      for (const dz of [-16, 0, 16]) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.25, 2.3, 0.25), this.pillarMat);
+        post.position.set(x - p.lx * s * 4.3 + Math.sin(p.h) * dz, p.y + 6, z - p.lz * s * 4.3 + Math.cos(p.h) * dz);
+        grp.add(post);
+      }
     }
   }
 

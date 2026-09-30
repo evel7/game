@@ -71,6 +71,9 @@
     <label class="opt">Звуки (мотор, шины) <input type="range" id="set-sfx" min="0" max="1" step="0.05" /></label>
     <label class="opt">Громкость музыки <input type="range" id="set-musicvol" min="0" max="1" step="0.05" /></label>
     <label class="opt">Музыка <input type="checkbox" id="set-music" /></label>
+    <label class="opt">Лёгкое управление (для удовольствия) <input type="checkbox" id="set-easy" /></label>
+    <label class="opt">Мультяшные контуры машин <input type="checkbox" id="set-outline" /></label>
+    <label class="opt">Дым из-под колёс <input type="checkbox" id="set-smoke" /></label>
     <label class="opt">Помощь в дрифте (авто-контрруль) <input type="checkbox" id="set-assist" /></label>
     <label class="opt">Ручная коробка (E / Q) <input type="checkbox" id="set-manual" /></label>
     <label class="opt">Графика
@@ -80,7 +83,7 @@
       <select id="set-camera"><option value="0">Сзади</option><option value="1">Сзади, дальняя</option><option value="2">С капота</option><option value="3">Кинокамера</option></select>
     </label>
     <label class="opt">Лимит FPS
-      <select id="set-fps"><option value="30">30</option><option value="60">60</option><option value="120">120</option><option value="144">144</option><option value="165">165</option><option value="240">240</option><option value="0">Без ограничений</option></select>
+      <select id="set-fps"><option value="30">30</option><option value="60">60</option><option value="120">120</option><option value="144">144</option><option value="165">165</option><option value="240">240</option><option value="0">Без ограничений (частота монитора)</option></select>
     </label>
     <label class="opt">Показывать FPS <input type="checkbox" id="set-showfps" /></label>
     <label class="opt">Спидометр <select id="set-units"><option value="kmh">км/ч</option><option value="mph">mph</option></select></label>
@@ -168,6 +171,6 @@
   <div id="countdown"></div>
   <div id="fps" class="hidden"></div>
 
-  <script src="dist/game.js"></script>
+  <script src="dist/game.js?v=1790797924846"></script>
 </body>
 </html>

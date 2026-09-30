@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 // Процедурные 3D-модели машин. Всё строится кодом — никаких чужих моделей.
 // Кузов: боковой профиль (сглаженный) → выдавливание → деформация (сужение носа/кормы и верха),
@@ -10,7 +10,7 @@ const smoothstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b
 
 // ---------- общие материалы ----------
 const M = {
-  glass: new THREE.MeshPhysicalMaterial({ color: 0x1b2633, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.55, envMapIntensity: 1.6, depthWrite: false }),
+  glass: new THREE.MeshStandardMaterial({ color: 0x1b2633, roughness: 0.05, metalness: 0.2, transparent: true, opacity: 0.55, envMapIntensity: 1.4, depthWrite: false }),
   black: new THREE.MeshStandardMaterial({ color: 0x121214, roughness: 0.65 }),
   gloss: new THREE.MeshStandardMaterial({ color: 0x0c0c0e, roughness: 0.25, metalness: 0.3 }),
   trim: new THREE.MeshStandardMaterial({ color: 0x1e1e22, roughness: 0.6, metalness: 0.05 }),
@@ -20,7 +20,7 @@ const M = {
   interior: new THREE.MeshStandardMaterial({ color: 0x1a1a1d, roughness: 0.8 }),
   seat: new THREE.MeshStandardMaterial({ color: 0x2a2a30, roughness: 0.75 }),
   carbon: new THREE.MeshStandardMaterial({ color: 0x1a1b1f, roughness: 0.3, metalness: 0.5 }),
-  lensClear: new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0.02, transparent: true, opacity: 0.25, depthWrite: false }),
+  lensClear: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.02, transparent: true, opacity: 0.25, depthWrite: false }),
   reverse: new THREE.MeshStandardMaterial({ color: 0xdddddd, emissive: 0xffffff, emissiveIntensity: 0.1, roughness: 0.2 }),
   amber: new THREE.MeshStandardMaterial({ color: 0xff9a1a, emissive: 0xff8800, emissiveIntensity: 0.4, roughness: 0.3 }),
 };
@@ -32,6 +32,11 @@ const STYLE = {
   veloce: { spokes: 10, rim: 0x202124, caliper: 0xffc400, rimDepth: 0.02, plate: '01 KG 777 GT' },
   tundra: { spokes: 8, rim: 0xf1f1f1, caliper: 0xd62828, rimDepth: 0.04, plate: '01 KG 555 RR', cage: true },
   ronin: { spokes: 6, rim: 0x6d7076, caliper: 0x1f6fe0, rimDepth: 0.05, plate: '01 KG 034 GR' },
+  vanta: { spokes: 7, rim: 0xb8bcc4, caliper: 0x1d3f8f, rimDepth: 0.04, plate: '01 KG 005 MW' },
+  kitsune: { spokes: 5, rim: 0x2b2b2e, caliper: 0xffc400, rimDepth: 0.05, plate: '01 KG 013 RX' },
+  tora: { spokes: 5, rim: 0xd6d8dc, caliper: 0xd62828, rimDepth: 0.07, plate: '01 KG 002 JZ' },
+  toro: { spokes: 10, rim: 0x1c1c1f, caliper: 0xff8c00, rimDepth: 0.02, plate: '01 KG 012 LP' },
+  stutt: { spokes: 5, rim: 0xc9ccd2, caliper: 0xffd000, rimDepth: 0.03, plate: '01 KG 911 SS' },
 };
 
 // ---------- утилиты ----------
@@ -141,6 +146,33 @@ function numberTex(n, dark) {
     c.fillStyle = dark ? '#fff' : '#111'; c.font = 'bold 70px Arial'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(String(n), 64, 68);
   });
 }
+const SPONSORS = [
+  ['ASMAN OIL', '#ffd400', '#111'], ['NITRO-X', '#111', '#39ff14'], ['ТУРБО KG', '#d62828', '#fff'], ['DRIFT LAB', '#fff', '#111'],
+  ['TOKMOK TIRES', '#111', '#ffcc00'], ['ALA-TOO', '#1d3f8f', '#fff'], ['KAZE WORKS', '#f2f2f2', '#d62828'], ['BISHKEK MS', '#00a86b', '#fff'],
+];
+function stickerTex(i) {
+  const [txt, bg, fg] = SPONSORS[i % SPONSORS.length];
+  return texCache['s' + i] ||= canvasTex(256, 64, (c, w, h) => {
+    c.fillStyle = bg; c.beginPath(); c.roundRect ? c.roundRect(2, 2, w - 4, h - 4, 14) : c.rect(2, 2, w - 4, h - 4); c.fill();
+    c.strokeStyle = fg; c.lineWidth = 3; c.stroke();
+    c.fillStyle = fg; c.font = 'italic 900 36px Arial'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(txt, w / 2, h / 2 + 2);
+  });
+}
+function bannerTex(text) {
+  return texCache['b' + text] ||= canvasTex(512, 48, (c, w, h) => {
+    c.fillStyle = '#0d0d10'; c.fillRect(0, 0, w, h);
+    c.fillStyle = '#fff'; c.font = 'italic 900 34px Arial'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(text, w / 2, h / 2 + 2);
+  });
+}
+
+function toonRamp() {
+  if (texCache.ramp) return texCache.ramp;
+  const data = new Uint8Array([90, 90, 90, 255, 170, 170, 170, 255, 235, 235, 235, 255, 255, 255, 255, 255]);
+  const t = new THREE.DataTexture(data, 4, 1, THREE.RGBAFormat);
+  t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true;
+  return (texCache.ramp = t);
+}
+
 function aoTex() {
   return texCache.ao ||= (() => {
     const cv = document.createElement('canvas'); cv.width = 64; cv.height = 128;
@@ -159,6 +191,7 @@ function mergeByMaterial(root) {
   const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
   const buckets = new Map();
   const meshes = [];
+  const out = [];
   root.traverse((o) => { if (o.isMesh) meshes.push(o); });
   const tmp = new THREE.Matrix4();
   for (const o of meshes) {
@@ -182,7 +215,29 @@ function mergeByMaterial(root) {
     m.castShadow = !(mat === M.lensClear) && !(mat.transparent && mat !== M.glass);
     m.receiveShadow = mat !== M.glass;
     root.add(m);
+    out.push(m);
   }
+  return out;
+}
+
+// Чёрный контур в мультяшном стиле (метод «вывернутой оболочки»): копия меша чуть раздута по нормалям
+// и рисуется только изнутри. Нормали сглажены, чтобы контур не рвался на острых гранях.
+const outlineMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide,
+  uniforms: { t: { value: 0.022 } },
+  vertexShader: 'uniform float t; void main(){ vec3 p = position + normal * t; gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0); }',
+  fragmentShader: 'void main(){ gl_FragColor = vec4(0.03, 0.03, 0.045, 1.0); }',
+});
+function addOutline(mesh, thick) {
+  let g = mesh.geometry.clone();
+  g.deleteAttribute('normal'); g.deleteAttribute('uv');
+  g = mergeVertices(g, 1e-3);
+  g.computeVertexNormals();
+  const mat = thick ? outlineMat.clone() : outlineMat;
+  if (thick) mat.uniforms.t.value = thick;
+  const o = new THREE.Mesh(g, mat);
+  o.position.copy(mesh.position); o.quaternion.copy(mesh.quaternion);
+  mesh.parent.add(o);
 }
 
 // ---------- колесо ----------
@@ -228,9 +283,10 @@ export function buildCarModel(spec, color, opts = {}) {
   const b = spec.body, wr = spec.wheelRadius;
   const st = STYLE[spec.id] || STYLE.kaze;
   const group = new THREE.Group();
-  const bodyMat = new THREE.MeshPhysicalMaterial({ color, roughness: 0.28, metalness: 0.45, clearcoat: 1.0, clearcoatRoughness: 0.08, envMapIntensity: 1.2 });
+  // мультяшная (cel) заливка: 3 ступени света, как в мобильных дрифт-играх — красиво и очень дёшево
+  const bodyMat = new THREE.MeshToonMaterial({ color, gradientMap: toonRamp() });
   const light = new THREE.Color(color).getHSL({}).l > 0.6;
-  const accentMat = new THREE.MeshStandardMaterial({ color: light ? 0x141414 : 0xf2f2f2, roughness: 0.4 });
+  const accentMat = new THREE.MeshStandardMaterial({ color: spec.id === 'vanta' ? 0x1d4fb8 : (light ? 0x141414 : 0xf2f2f2), roughness: 0.4 });
   const L = b.L, W = b.W;
 
   // ===== кузов =====
@@ -325,7 +381,27 @@ export function buildCarModel(spec, color, opts = {}) {
       box(0.4, 0.02, 0.28, M.gloss, sx * W * 0.3, b.upper[2][1] - 0.005, zF - 0.4, group);
     }
   }
-  for (const sx of [1, -1]) {
+  if (ex.includes('roundlights')) {
+    // круглые «лягушачьи» фары на крыльях
+    for (const sx of [1, -1]) {
+      const hx = sx * fW * 0.34, hy = b.upper[2][1] - 0.02, hz = zF - 0.32;
+      cyl(0.12, 0.2, bodyMat, hx, hy, hz, 'z', group, 20);
+      cyl(0.1, 0.03, headMat, hx, hy, hz + 0.1, 'z', group, 20);
+    }
+  }
+  const wedge = b.upper[1][1] - b.upper[0][1] < 0.2;
+  if (wedge) {
+    // у клиновидных суперкаров фары — узкие полосы на верхней плоскости носа
+    const zz = zF - 0.35;
+    let yy = up[0][1];
+    for (let i = 0; i < up.length - 1; i++) if (up[i][0] >= zz && up[i + 1][0] <= zz) { const t = (up[i][0] - zz) / (up[i][0] - up[i + 1][0]); yy = up[i][1] + (up[i + 1][1] - up[i][1]) * t; }
+    const slope = Math.atan2(b.upper[2][1] - b.upper[1][1], b.upper[1][0] - b.upper[2][0]);
+    for (const sx of [1, -1]) {
+      const h1 = box(0.46, 0.03, 0.2, M.gloss, sx * fW * 0.32, yy + 0.09, zz, group); h1.rotation.x = slope;
+      const h2 = box(0.4, 0.035, 0.05, headMat, sx * fW * 0.32, yy + 0.1, zz + 0.07, group); h2.rotation.x = slope;
+    }
+  }
+  for (const sx of (ex.includes('roundlights') || wedge ? [] : [1, -1])) {
     // блок-фара: корпус, отражатель, линза-проектор, стекло, поворотник
     const hx = sx * fW * 0.33;
     box(0.44, 0.15, 0.08, M.gloss, hx, frontY, zF - 0.02, group);
@@ -416,7 +492,8 @@ export function buildCarModel(spec, color, opts = {}) {
   }
 
   // ===== индивидуальные детали =====
-  const deckY = b.upper[rearIdx][1];
+  // высота крышки багажника/моторного отсека — самая высокая точка кузова позади кабины
+  const deckY = Math.max(...b.upper.filter((q) => q[0] < c[c.length - 1][0] + 0.05).map((q) => q[1]));
   if (ex.includes('wing')) {
     const wingShape = new THREE.Shape();
     wingShape.moveTo(0, 0); wingShape.lineTo(0.36, 0.02); wingShape.lineTo(0.34, 0.05); wingShape.lineTo(0.02, 0.04); wingShape.closePath();
@@ -459,7 +536,7 @@ export function buildCarModel(spec, color, opts = {}) {
   }
   if (ex.includes('stripes')) for (const sx of [0.13, -0.13]) {
     const hood = box(0.16, 0.008, Math.abs(zF - c[0][0]), accentMat, sx, 0, (zF + c[0][0]) / 2, group);
-    hood.position.y = b.upper[3][1] + 0.012;
+    hood.position.y = b.upper[3][1] + 0.03;
     box(0.16, 0.008, roofLen, accentMat, sx, roofY + 0.045, roofZ, group);
     box(0.16, 0.008, Math.abs(c[3][0] - zR), accentMat, sx, deckY + 0.012, (c[3][0] + zR) / 2, group);
   }
@@ -477,12 +554,36 @@ export function buildCarModel(spec, color, opts = {}) {
     ant.position.set(-W * 0.35, deckY + 0.28, zR + 0.45); ant.rotation.x = -0.25; group.add(ant);
   }
   if (spec.id === 'tundra') {
-    // раллийная ливрея
-    for (const sx of [1, -1]) {
-      const stripe = box(0.006, 0.12, L * 0.7, accentMat, sx * (sideX(0, 0.5) + 0.004), 0.47, 0, group);
-      stripe.rotation.x = 0.06;
-    }
     box(0.8, 0.012, 0.14, accentMat, 0, roofY + 0.045, roofZ - 0.2, group);
+  }
+
+  // ===== стиль дрифт-корча: полоса на лобовом, наклейки спонсоров, буксировочные петли, канарды, пины капота =====
+  {
+    const d = new THREE.Vector3(0, c[1][1] - c[0][1], c[1][0] - c[0][0]).normalize();
+    const n = new THREE.Vector3(0, -d.z, d.y).normalize();
+    const top = new THREE.Vector3(0, c[1][1], c[1][0]).addScaledVector(d, -0.08).addScaledVector(n, 0.012);
+    const ban = new THREE.Mesh(new THREE.PlaneGeometry(cabX(top.y) * 2 * 0.95, 0.11), new THREE.MeshStandardMaterial({ map: bannerTex(st.banner || spec.name + ' RACING'), roughness: 0.5 }));
+    ban.position.copy(top); ban.lookAt(top.clone().add(n)); group.add(ban);
+    const seed = spec.id.charCodeAt(0) + spec.id.charCodeAt(1);
+    const stick = (k, z, y, w) => {
+      for (const sx of [1, -1]) {
+        const pl = new THREE.Mesh(new THREE.PlaneGeometry(w, w / 4), new THREE.MeshStandardMaterial({ map: stickerTex(seed + k), transparent: true, roughness: 0.45 }));
+        pl.position.set(sx * (sideX(z, y) + 0.007), y, z); pl.rotation.y = sx * Math.PI / 2; group.add(pl);
+      }
+    };
+    stick(0, b.wheelF - 0.02, wr * 2 + 0.16 + (b.ride ?? 0), 0.5);
+    stick(1, b.wheelR + 0.05, wr * 2 + 0.17 + (b.ride ?? 0), 0.46);
+    stick(2, (b.wheelF + b.wheelR) / 2 + 0.15, rb + 0.17, 0.62);
+    // красные буксировочные петли
+    const towMat = new THREE.MeshStandardMaterial({ color: 0xe01e1e, roughness: 0.5 });
+    const tf = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.018, 6, 12), towMat); tf.position.set(-W * 0.3, noseY + 0.02, zF + 0.1); group.add(tf);
+    const tr = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.018, 6, 12), towMat); tr.position.set(W * 0.34, rb + 0.02, zR - 0.08); group.add(tr);
+    // канарды на углах бампера
+    for (const sx of [1, -1]) {
+      const cn = box(0.22, 0.015, 0.12, M.carbon, sx * W * 0.42, noseY + 0.12, zF - 0.05, group); cn.rotation.z = sx * 0.25;
+    }
+    // пины капота
+    for (const sx of [1, -1]) cyl(0.02, 0.02, M.chrome, sx * W * 0.3, b.upper[3][1] + 0.015, zF - 0.25, 'y', group, 8);
   }
 
   // днище
@@ -512,8 +613,13 @@ export function buildCarModel(spec, color, opts = {}) {
   const root = new THREE.Group();
   chassis.add(group);
   for (const w of wheels) { group.remove(w.pivot); root.add(w.pivot); }
-  mergeByMaterial(group);
-  for (const w of wheels) { mergeByMaterial(w.wheel); w.pivot.children.forEach((c) => { if (c.isMesh) c.castShadow = false; }); }
+  const merged = mergeByMaterial(group);
+  if (opts.outline !== false) for (const m of merged) if (m.material === bodyMat || m.material === M.glass || m.material === M.trim || m.material === M.carbon) addOutline(m, m.material === bodyMat ? 0 : 0.014);
+  for (const w of wheels) {
+    const wm = mergeByMaterial(w.wheel);
+    if (opts.outline !== false) for (const m of wm) if (m.material === M.tire) addOutline(m, 0.016);
+    w.pivot.children.forEach((c) => { if (c.isMesh) c.castShadow = false; });
+  }
   root.add(chassis); root.add(shadow);
 
   return { root, chassis, wheels, bodyMat, headMat, tailMat, spec };
@@ -525,9 +631,10 @@ export function animateCar(model, veh, dt, braking) {
     w.wheel.rotation.x = veh.wheelSpin;
     if (w.front) w.pivot.rotation.y = veh.steer;
   }
-  const targetRoll = Math.max(-0.09, Math.min(0.09, veh.ay * 0.009));
-  const targetPitch = Math.max(-0.06, Math.min(0.06, -veh.ax * 0.006));
-  model.chassis.rotation.z += (targetRoll - model.chassis.rotation.z) * Math.min(1, dt * 7);
-  model.chassis.rotation.x += (targetPitch - model.chassis.rotation.x) * Math.min(1, dt * 7);
+  // мягкий крен и клевок (небольшие и плавные — без дёрганья кузова)
+  const targetRoll = Math.max(-0.05, Math.min(0.05, veh.ay * 0.005));
+  const targetPitch = Math.max(-0.025, Math.min(0.025, -veh.ax * 0.0025));
+  model.chassis.rotation.z += (targetRoll - model.chassis.rotation.z) * Math.min(1, dt * 4);
+  model.chassis.rotation.x += (targetPitch - model.chassis.rotation.x) * Math.min(1, dt * 3);
   model.tailMat.emissiveIntensity = braking ? 3.0 : model._tailBase ?? 0.35;
 }

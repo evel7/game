@@ -34,7 +34,7 @@ const store = {
 };
 const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 if (isTouch) document.body.classList.add('touch');
-const settings = Object.assign({ vol: 0.8, music: true, assist: true, manual: false, quality: isTouch ? 0 : 1, camera: 0, units: 'kmh', fps: 120, showFps: false, sfxVol: 0.8, musicVol: 0.3 }, store.get('settings', {}));
+const settings = Object.assign({ vol: 0.8, music: true, assist: true, manual: false, quality: isTouch ? 0 : 1, camera: 0, units: 'kmh', fps: 0, showFps: false, sfxVol: 0.8, musicVol: 0.3, easy: true, smoke: true, outline: true }, store.get('settings', {}));
 const sel = Object.assign({ car: 0, colors: {}, mode: 0, map: 0 }, store.get('sel', {}));
 let records = store.get('records', {});
 const saveSettings = () => store.set('settings', settings);
@@ -162,7 +162,7 @@ function carColor(spec) { return spec.colors[sel.colors[spec.id] ?? 0]; }
 function spawnPlayer(idx, lat) {
   const spec = CARS[sel.car];
   if (W.player) { W.group.remove(W.player.model.root); }
-  const model = buildCarModel(spec, carColor(spec), { night: W.map.night });
+  const model = buildCarModel(spec, carColor(spec), { night: W.map.night, outline: settings.outline });
   model._tailBase = W.map.night ? 1.2 : 0.35;
     W.group.add(model.root);
   const veh = new Vehicle(spec);
@@ -178,10 +178,19 @@ function spawnPlayer(idx, lat) {
   placePlayerModel(0);
 }
 
+// Интерполяция между шагами физики: картинка плавная при любом FPS, без рывков «вперёд-назад»
+function interp() {
+  const { veh } = W.player;
+  const a = G && veh.px !== undefined ? clamp(G.acc / STEP, 0, 1) : 1;
+  const L = (p, c) => (p === undefined ? c : p + (c - p) * a);
+  let dh = veh.h - (veh.ph ?? veh.h);
+  return { x: L(veh.px, veh.x), z: L(veh.pz, veh.z), h: (veh.ph ?? veh.h) + dh * a, y: L(veh.pY, veh.roadY) };
+}
 function placePlayerModel(dt) {
   const { veh, model } = W.player;
-  model.root.position.set(veh.x, veh.roadY, veh.z);
-  model.root.rotation.set(-Math.atan(veh.slope || 0), veh.h, 0, 'YXZ');
+  const ip = interp();
+  model.root.position.set(ip.x, ip.y + 0.03, ip.z);
+  model.root.rotation.set(-Math.atan(veh.slope || 0), ip.h, 0, 'YXZ');
   animateCar(model, veh, dt || 0.016, G && G.braking);
 }
 
@@ -190,7 +199,7 @@ function spawnRivals(n) {
   for (let i = 0; i < n; i++) {
     const spec = CARS[(sel.car + 1 + i) % CARS.length];
     const color = spec.colors[(i * 2 + 1) % spec.colors.length];
-    const model = buildCarModel(spec, color, { night: W.map.night });
+    const model = buildCarModel(spec, color, { night: W.map.night, outline: settings.outline });
     model._tailBase = W.map.night ? 1.2 : 0.35;
     W.group.add(model.root);
     const r = new Rival(spec, model, grid[i][0], grid[i][1], 0.82 + Math.random() * 0.13, W.map.grip);
@@ -206,7 +215,9 @@ const CAM_NAMES = ['Камера: сзади', 'Камера: сзади, дал
 const angDiff = (a, b) => { let d = a - b; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
 
 function updateCamera(dt, instant = false) {
-  const { veh } = W.player;
+  const { veh: real } = W.player;
+  const ip = interp();
+  const veh = { x: ip.x, z: ip.z, h: ip.h, roadY: ip.y, speed: real.speed, u: real.u, vx: real.vx, vz: real.vz, spec: real.spec, slope: real.slope };
   const spd = veh.speed;
   const fwdX = Math.sin(veh.h), fwdZ = Math.cos(veh.h);
   const cy = veh.roadY;
@@ -216,7 +227,7 @@ function updateCamera(dt, instant = false) {
   const target = veh.h + clamp(angDiff(Math.atan2(veh.vx, veh.vz), veh.h), -0.7, 0.7) * w;
   if (instant) cam.h = target;
   cam.h += angDiff(target, cam.h) * Math.min(1, dt * 3.5);
-  const k = instant ? 1 : 1 - Math.exp(-dt * 9);
+  const k = instant ? 1 : 1 - Math.exp(-dt * 7);
   let fov = 60 + Math.min(20, spd * 0.24);
   const des = new THREE.Vector3(), look = new THREE.Vector3();
   if (cam.mode === 0 || cam.mode === 1) {
@@ -225,7 +236,7 @@ function updateCamera(dt, instant = false) {
     look.set(veh.x + Math.sin(cam.h) * 2.5, cy + 1.05, veh.z + Math.cos(cam.h) * 2.5);
     cam.pos.lerp(des, k);
     cam.pos.y = Math.max(cam.pos.y, cy + 1.0);
-    cam.look.lerp(look, instant ? 1 : 1 - Math.exp(-dt * 16));
+    cam.look.lerp(look, instant ? 1 : 1 - Math.exp(-dt * 12));
   } else if (cam.mode === 2) {
     const b = veh.spec.body;
     des.set(veh.x + fwdX * (b.cabin[0][0] + 0.25), cy + b.cabin[0][1] + 0.55, veh.z + fwdZ * (b.cabin[0][0] + 0.25));
@@ -242,7 +253,7 @@ function updateCamera(dt, instant = false) {
     cam.look.lerp(look, 1 - Math.exp(-dt * 12));
     fov = 55;
   }
-  cam.fov += (fov - cam.fov) * Math.min(1, dt * 3);
+  cam.fov += (fov - cam.fov) * Math.min(1, dt * 1.5);
   camera.fov = cam.fov; camera.updateProjectionMatrix();
   camera.position.copy(cam.pos);
   if (cam.shake > 0.001) {
@@ -250,8 +261,6 @@ function updateCamera(dt, instant = false) {
     camera.position.y += (Math.random() - 0.5) * cam.shake * 0.5;
     cam.shake *= Math.exp(-dt * 6);
   }
-  // лёгкая вибрация на большой скорости
-  if (spd > 45) camera.position.y += (Math.random() - 0.5) * 0.02 * (spd - 45) / 20;
   camera.lookAt(cam.look);
 }
 
@@ -303,7 +312,7 @@ function crashFx(impact) {
   if (now - lastCrash < 330) return false;
   lastCrash = now;
   audio.crash(Math.min(impact, 25));
-  cam.shake = Math.min(0.5, impact / 25);
+  cam.shake = impact > 8 ? Math.min(0.25, impact / 60) : 0;
   return true;
 }
 function onHit(impact) {
@@ -320,8 +329,9 @@ function onHit(impact) {
 
 function physicsStep(inp) {
   const { veh } = W.player;
+  veh.px = veh.x; veh.pz = veh.z; veh.ph = veh.h; veh.pY = veh.roadY;
   const track = W.track;
-  const res = veh.step(STEP, inp, { grip: W.map.grip, assist: settings.assist ? 1 : 0, manual: settings.manual });
+  const res = veh.step(STEP, inp, { grip: W.map.grip * (settings.easy ? 1.12 : 1), assist: settings.assist ? (settings.easy ? 1.15 : 1) : 0, manual: settings.manual, easy: settings.easy });
   if (res.shifted) { audio.shift(); if (res.shifted > 0 && inp.throttle > 0.5 && Math.random() < 0.35) audio.backfire(); }
   inp.shiftUp = inp.shiftDown = false;
   const pr = track.project(veh.x, veh.z, veh.idx);
@@ -528,17 +538,18 @@ function updateFx(dt, inp) {
   const q = +settings.quality;
   for (const side of [1, -1]) {
     const [x, z] = wheelPos(b.wheelR, side * b.track / 2);
-    if (slip > 0.4 && spd > 5 && !veh.offroad) {
-      if (Math.random() < (q > 0 ? 14 : 8) * dt) W.smoke.emit(x, veh.roadY, z, veh.vx, veh.vz, slip, W.map.night ? 0.22 : 0.32);
+    // дым только в настоящем заносе (большой угол), а не от простого газа в повороте
+    if (settings.smoke && slip > 0.55 && spd > 8 && !veh.offroad && Math.abs(veh.beta) > 0.35) {
+      if (Math.random() < (q > 0 ? 4 : 2) * dt * Math.min(1, (Math.abs(veh.beta) - 0.3) * 3)) W.smoke.emit(x, veh.roadY, z, veh.vx, veh.vz, slip, W.map.night ? 0.14 : 0.2);
     }
-    if (veh.offroad && spd > 4 && Math.random() < 10 * dt) W.dust.emit(x, veh.roadY, z, veh.vx, veh.vz, 1, 0.55);
+    if (settings.smoke && veh.offroad && spd > 4 && Math.random() < 5 * dt) W.dust.emit(x, veh.roadY, z, veh.vx, veh.vz, 1, 0.55);
     W.skids.add(side > 0 ? 0 : 1, x, veh.roadY, z, lx, lz, !veh.offroad && slip > 0.42 ? Math.min(1, (slip - 0.3) * 1.6) : 0);
     const [fx, fz] = wheelPos(b.wheelF, side * b.track / 2);
     W.skids.add(side > 0 ? 2 : 3, fx, veh.roadY, fz, lx, lz, !veh.offroad && (veh.frontSlide > 0.85 || (inp.brake > 0.5 && spd > 15 && veh.u > 0 && veh.lockR > 0)) ? 0.6 : 0);
   }
   // соперники тоже дымят в поворотах
   for (const r of W.rivals) {
-    if (Math.abs(r.pose.k) * r.v * r.v > 7 && Math.random() < 4 * dt) W.smoke.emit(r.x, r.y, r.z, r.vx, r.vz, 0.6, 0.25);
+    if (settings.smoke && Math.abs(r.pose.k) * r.v * r.v > 9 && Math.random() < 1.5 * dt) W.smoke.emit(r.x, r.y, r.z, r.vx, r.vz, 0.6, 0.25);
   }
   W.smoke.update(dt); W.dust.update(dt);
   if (W.snow) W.snow.update(dt, camera);
@@ -565,7 +576,7 @@ function drawGauge(veh) {
   // обороты
   const rf = clamp(veh.rpm / veh.spec.redline, 0, 1);
   c.beginPath(); c.arc(cx, cy, R, a0, a0 + (a1 - a0) * rf);
-  c.strokeStyle = rf > 0.9 ? '#ff3b3b' : rf > 0.75 ? '#ffb300' : '#ffcc00'; c.lineWidth = 10; c.stroke();
+  c.strokeStyle = rf > 0.95 ? '#ff3b3b' : rf > 0.85 ? '#ffb300' : '#ffcc00'; c.lineWidth = 10; c.stroke();
   // отметки
   for (let i = 0; i <= 10; i++) {
     const a = a0 + (a1 - a0) * i / 10;
@@ -726,11 +737,16 @@ function renderSettings() {
   $('set-vol').value = settings.vol; $('set-music').checked = settings.music; $('set-assist').checked = settings.assist;
   $('set-manual').checked = settings.manual; $('set-quality').value = settings.quality; $('set-camera').value = settings.camera; $('set-units').value = settings.units;
   $('set-sfx').value = settings.sfxVol; $('set-musicvol').value = settings.musicVol;
+  $('set-outline').checked = settings.outline;
+  $('set-easy').checked = settings.easy; $('set-smoke').checked = settings.smoke;
   $('set-fps').value = settings.fps; $('set-showfps').checked = settings.showFps;
 }
 $('set-vol').addEventListener('input', (e) => { settings.vol = +e.target.value; audio.setVolume(settings.vol); saveSettings(); });
 $('set-sfx').addEventListener('input', (e) => { settings.sfxVol = +e.target.value; audio.setSfxVol(settings.sfxVol); saveSettings(); });
 $('set-musicvol').addEventListener('input', (e) => { settings.musicVol = +e.target.value; audio.setMusicVol(settings.musicVol); saveSettings(); });
+$('set-outline').addEventListener('change', (e) => { settings.outline = e.target.checked; saveSettings(); if (state === 'menu') spawnPlayer(6, -2.8); });
+$('set-easy').addEventListener('change', (e) => { settings.easy = e.target.checked; saveSettings(); });
+$('set-smoke').addEventListener('change', (e) => { settings.smoke = e.target.checked; saveSettings(); if (W) W.smoke.clear(); });
 $('set-music').addEventListener('change', (e) => { settings.music = e.target.checked; audio.setMusic(settings.music); saveSettings(); });
 $('set-assist').addEventListener('change', (e) => { settings.assist = e.target.checked; saveSettings(); });
 $('set-manual').addEventListener('change', (e) => { settings.manual = e.target.checked; saveSettings(); });
@@ -761,7 +777,7 @@ function handleEvents(evs) {
       }
       if (e === 'reset' && state === 'race') {
         const { veh } = W.player; const p = W.track.sample(Math.max(W.track.base + 2, veh.idx));
-        veh.reset(p.x, p.z, p.h); veh.idx = Math.round(veh.idx); veh.roadY = p.y;
+        veh.reset(p.x, p.z, p.h); veh.idx = Math.round(veh.idx); veh.roadY = p.y; veh.px = undefined; veh.ph = undefined; veh.pY = undefined; veh.pz = undefined;
         W.skids.last = [null, null, null, null];
         showMsg('НА ТРАССУ', 0.8);
       }

@@ -15,7 +15,7 @@ export const MAPS = [
     ground: { near: 0xd6a066, far: 0xc07a45, hills: 26 },
     road: { asphalt: '#55504b', line: '#f2c230', edge: '#eeeeee', halfWidth: 6.5, shoulder: 1.6, shoulderColor: '#b98a5a' },
     barrier: 'tires',
-    track: { minR: 30, maxR: 160, straight: [40, 160], hill: 9 },
+    track: { minR: 40, maxR: 170, straight: [50, 180], hill: 9 },
     props: ['cactus', 'rock', 'mesa', 'bush'],
   },
   {
@@ -29,7 +29,7 @@ export const MAPS = [
     ground: { near: 0xf4f7fb, far: 0xdfe7f0, hills: 40 },
     road: { asphalt: '#5d6168', line: '#ffffff', edge: '#f2f2f2', halfWidth: 6.0, shoulder: 1.8, shoulderColor: '#e9eef4' },
     barrier: 'rail',
-    track: { minR: 21, maxR: 110, straight: [25, 90], hill: 16 },
+    track: { minR: 30, maxR: 130, straight: [35, 120], hill: 14 },
     props: ['pine', 'pine', 'rock', 'peak'],
   },
   {
@@ -43,7 +43,7 @@ export const MAPS = [
     ground: { near: 0x2a2a33, far: 0x1c1c24, hills: 0 },
     road: { asphalt: '#2c2c33', line: '#ffcc33', edge: '#dddddd', halfWidth: 7.5, shoulder: 1.4, shoulderColor: '#50505a' },
     barrier: 'concrete',
-    track: { minR: 22, maxR: 120, straight: [40, 140], hill: 3, corners: true },
+    track: { minR: 30, maxR: 130, straight: [50, 160], hill: 3, corners: true },
     props: ['building', 'building', 'lamp', 'neon'],
   },
 ];

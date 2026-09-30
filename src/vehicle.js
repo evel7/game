@@ -73,15 +73,22 @@ export class Vehicle {
     const spd = Math.hypot(u, v);
 
     // ---------- рулевое управление ----------
-    const speedFactor = 1 / (1 + Math.max(0, Math.abs(u) - 5) / (s.steerFade ?? 22));
+    const speedFactor = 1 / (1 + Math.max(0, Math.abs(u) - 5) / ((s.steerFade ?? 22) * (opts.easy ? 0.85 : 1)));
     let target = input.steer * s.steerMax * speedFactor;
     // помощь в дрифте: автоматическая контррулёжка по углу скольжения
     const beta = spd > 3 ? Math.atan2(v, Math.max(Math.abs(u), 0.5)) : 0;
+    // «намерение дрифтить»: ручник или пинок сцеплением запускают занос; пока держишь угол с газом — намерение сохраняется.
+    // Без намерения (в лёгком режиме) машина на скорости сама стабилизируется и не уходит в занос случайно.
+    if (input.handbrake > 0.3 || this.kickT > 0) this.intent = 1.6;
+    else if (Math.abs(beta) > 0.2 && input.throttle > 0.3 && (this.intent || 0) > 0) this.intent = Math.max(this.intent, 0.6);
+    else if (u < 12) this.intent = Math.max(this.intent || 0, 0.3); // на малой скорости всегда можно покрутить «пончики»
+    this.intent = Math.max(0, (this.intent || 0) - dt);
+    const calm = opts.easy && this.intent <= 0;
     if (opts.assist > 0 && u > 3) {
       target += clamp(beta, -0.9, 0.9) * 0.85 * opts.assist * (1 - 0.5 * Math.abs(input.steer));
     }
     target = clamp(target, -s.steerMax * 1.25, s.steerMax * 1.25);
-    const steerRate = 4.5; // рад/с
+    const steerRate = 7.5; // рад/с — быстрые перекладки руля в «восьмёрках»
     this.steer += clamp(target - this.steer, -steerRate * dt, steerRate * dt);
     const d = this.steer;
 
@@ -104,7 +111,7 @@ export class Vehicle {
         if (input.shiftUp && this.gear < gears.length) { this.gear++; this.shiftTimer = 0.12; shifted = 1; }
         if (input.shiftDown && this.gear > 1) { this.gear--; this.shiftTimer = 0.12; shifted = -1; }
       } else if (this.shiftTimer <= 0) {
-        if (rpmW > s.redline * 0.93 && this.gear < gears.length) { this.gear++; this.shiftTimer = 0.18; shifted = 1; }
+        if (rpmW > s.redline * 0.9 && this.gear < gears.length) { this.gear++; this.shiftTimer = 0.09; shifted = 1; }
         else if (this.gear > 1 && Math.abs(beta) < 0.22 && this.spinR < 0.05 && wheelRpmFromSpeed(this.gear - 1) < s.redline * 0.62) { this.gear--; this.shiftTimer = 0.12; shifted = -1; }
       }
     }
@@ -161,7 +168,10 @@ export class Vehicle {
     const rf = s.rollFront ?? (s.drive === 'RWD' ? 0.46 : 0.56);
     const lsF = 1 - 0.14 * Math.min(1, (dFz * rf) / (Fzf / 2)) ** 2;
     const lsR = 1 - 0.14 * Math.min(1, (dFz * (1 - rf)) / (Fzr / 2)) ** 2;
-    const FmaxF = muF * Fzf * lsF, FmaxR = muR * Fzr * lsR;
+    // лёгкий режим: на скорости машина цепче держит поворот (если не дрифтишь специально ручником/заносом)
+    let hsGrip = 1;
+    if (calm) hsGrip = 1 + 0.3 * clamp((spd - 18) / 30, 0, 1);
+    const FmaxF = muF * Fzf * lsF * hsGrip, FmaxR = muR * Fzr * lsR * hsGrip;
 
     // ---------- продольные силы ----------
     let FxF = 0, FxR = 0;
@@ -185,7 +195,8 @@ export class Vehicle {
 
     // трекшн-контроль на прямой: при старте и разгоне без руля колёса не буксуют впустую.
     // В повороте, с ручником, при «пинке» или в заносе — отключается, чтобы можно было дрифтить.
-    const straight = Math.abs(beta) < 0.1 && Math.abs(input.steer) < 0.3 && hb < 0.1 && !(this.kickT > 0);
+    const straight = (Math.abs(beta) < 0.1 && Math.abs(input.steer) < 0.3 && hb < 0.1 && !(this.kickT > 0)) ||
+      (calm && u > 15); // в лёгком режиме без намерения дрифтить газ не срывает задок
     if (opts.tcs !== false && straight && driveF > 0) {
       FxR = Math.min(FxR, FmaxR * 0.97);
       FxF = Math.min(FxF, FmaxF * 0.97);
@@ -256,7 +267,30 @@ export class Vehicle {
     this.vx += FwX / this.m * dt;
     this.vz += FwZ / this.m * dt;
     this.r += Tz / this.I * dt;
-    this.r *= 1 - Math.min(0.5, (s.yawDamp ?? 0.6) * dt); // лёгкое демпфирование
+    // помощь при перекладке заноса (левый дрифт → правый): если руль повёрнут против текущего вращения,
+    // добавляем немного момента в сторону руля — машина охотно «перекидывается», как в аркадных дрифт-играх
+    if (opts.assist > 0 && u > 5 && Math.abs(input.steer) > 0.3 && Math.sign(input.steer) !== Math.sign(this.r) && (Math.abs(beta) > 0.12 || this.rearSlide > 0.4)) {
+      this.r += input.steer * 3.2 * dt * opts.assist * Math.min(1, u / 15);
+    }
+    const drifting = Math.abs(beta) > 0.15;
+    // как в FR Legends: в управляемом заносе с газом машина почти не теряет скорость
+    if (opts.assist > 0 && Math.abs(beta) > 0.2 && Math.abs(beta) < 1.2 && throttle > 0.5 && spd > 6) {
+      const k = 3.2 * opts.assist * throttle * dt / spd;
+      this.vx += this.vx * k; this.vz += this.vz * k;
+    }
+    this.r *= 1 - Math.min(0.5, (s.yawDamp ?? 0.6) * (drifting ? 0.4 : 1) * dt); // лёгкое демпфирование
+    // стабилизация на скорости в лёгком режиме: гасим резкие «виляния», если не в заносе
+    if (calm && u > 12) {
+      const rTarget = u * Math.tan(this.steer) / this.L * 0.95;
+      const lim = 9.81 * 1.3 / Math.max(u, 1); // не круче, чем позволяет ~1.3g
+      this.r += (clamp(rTarget, -lim, lim) - this.r) * Math.min(1, 4 * dt);
+      // гасим боковое скольжение кузова
+      const k = Math.min(1, 3 * dt);
+      const fx = sh, fz = ch;
+      const along = this.vx * fx + this.vz * fz;
+      this.vx += (fx * along - this.vx) * k * 0.5 * clamp(Math.abs(beta) / 0.3, 0, 1);
+      this.vz += (fz * along - this.vz) * k * 0.5 * clamp(Math.abs(beta) / 0.3, 0, 1);
+    }
     // стабилизация «помощника»: не даём закрутиться волчком
     if (opts.assist > 0 && Math.abs(beta) > 1.05 && u > 2) this.r *= 1 - 2.5 * dt * opts.assist;
 

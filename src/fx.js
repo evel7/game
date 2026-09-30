@@ -63,7 +63,10 @@ export class Smoke {
       transparent: true, depthWrite: false,
       uniforms: { color: { value: new THREE.Color(color) }, scale: { value: innerHeight * 0.5 } },
       vertexShader: `attribute float size; attribute float alpha; varying float a; uniform float scale;
-        void main(){ a = alpha; vec4 mv = modelViewMatrix * vec4(position,1.0); gl_PointSize = min(size * scale / -mv.z, 400.0); gl_Position = projectionMatrix * mv; }`,
+        void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0);
+          // возле камеры дым растворяется — не залепляет экран
+          a = alpha * smoothstep(3.0, 9.0, -mv.z);
+          gl_PointSize = min(size * scale / -mv.z, 260.0); gl_Position = projectionMatrix * mv; }`,
       fragmentShader: `uniform vec3 color; varying float a;
         void main(){ vec2 d = gl_PointCoord - 0.5; float r = dot(d,d)*4.0; if (r > 1.0) discard; gl_FragColor = vec4(color, a * (1.0 - r) * (1.0 - r)); }`,
     });
@@ -74,10 +77,12 @@ export class Smoke {
   }
   emit(x, y, z, vx, vz, amount, opacity = 0.5) {
     const i = this.next; this.next = (this.next + 1) % this.max;
-    this.pos[i * 3] = x + (Math.random() - 0.5) * 0.3; this.pos[i * 3 + 1] = y + 0.55; this.pos[i * 3 + 2] = z + (Math.random() - 0.5) * 0.3;
-    this.vel[i * 3] = vx * 0.25 + (Math.random() - 0.5) * 1.2; this.vel[i * 3 + 1] = 0.5 + Math.random() * 0.7; this.vel[i * 3 + 2] = vz * 0.25 + (Math.random() - 0.5) * 1.2;
+    // дым стелется по асфальту: почти не поднимается, расползается в стороны и остаётся на месте
+    this.pos[i * 3] = x + (Math.random() - 0.5) * 0.3; this.pos[i * 3 + 1] = y + 0.35; this.pos[i * 3 + 2] = z + (Math.random() - 0.5) * 0.3;
+    const a = Math.random() * Math.PI * 2, sp = 0.8 + Math.random() * 1.4;
+    this.vel[i * 3] = vx * 0.08 + Math.cos(a) * sp; this.vel[i * 3 + 1] = 0.08 + Math.random() * 0.15; this.vel[i * 3 + 2] = vz * 0.08 + Math.sin(a) * sp;
     this.life[i] = 0; this.maxLife[i] = 1.4 + Math.random() * 0.8 * amount;
-    this.base[i] = 1.4 + Math.random() * 0.6; this.op[i] = opacity;
+    this.base[i] = 1.1 + Math.random() * 0.5; this.op[i] = opacity;
   }
   update(dt) {
     const k = 1 - dt * 1.5;
@@ -88,7 +93,7 @@ export class Smoke {
       if (t >= 1) { this.op[i] = 0; this.alpha[i] = 0; continue; }
       this.pos[i * 3] += this.vel[i * 3] * dt; this.pos[i * 3 + 1] += this.vel[i * 3 + 1] * dt; this.pos[i * 3 + 2] += this.vel[i * 3 + 2] * dt;
       this.vel[i * 3] *= k; this.vel[i * 3 + 2] *= k;
-      this.size[i] = this.base[i] * (1 + t * 3.2);
+      this.size[i] = this.base[i] * (1 + t * 2.4);
       this.alpha[i] = this.op[i] * (1 - t) * Math.min(1, this.life[i] * 8);
     }
     const a = this.points.geometry.attributes;
