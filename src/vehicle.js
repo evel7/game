@@ -116,15 +116,27 @@ export class Vehicle {
     const throttle = this.shiftTimer > 0 ? 0 : (this.gear === -1 ? input.brake : input.throttle);
     // при пробуксовке обороты «улетают» вверх
     let rpmTarget = Math.max(s.idle, rpmWheel);
-    if (this.spinR > 0.05) rpmTarget = Math.max(rpmTarget, s.idle + (s.redline - s.idle) * (0.55 + 0.45 * throttle) * Math.min(1, this.spinR * 2));
+    if (this.spinR > 0.05) rpmTarget = Math.max(rpmTarget, s.idle + (s.redline * 0.9 - s.idle) * (0.6 + 0.4 * throttle) * Math.min(1, this.spinR * 2));
     if (Math.abs(u) < 2 && throttle > 0) rpmTarget = Math.max(rpmTarget, s.idle + (s.redline * 0.6 - s.idle) * throttle);
     this.rpm += (rpmTarget - this.rpm) * Math.min(1, dt * 12);
-    const limiter = this.rpm >= s.redline;
+    // отсечка срабатывает только когда реально перекручен мотор по скорости колёс,
+    // а не при пробуксовке (раньше она резала момент на старте — «что-то держит»)
+    const limiter = rpmWheel >= s.redline;
     if (limiter) this.rpm = s.redline - 150 * Math.random();
+    else this.rpm = Math.min(this.rpm, s.redline * 0.97);
+
+    // «пинок сцеплением» (clutch kick): резко отпустил и снова втопил газ — короткий всплеск момента,
+    // срывает задние колёса для входа в занос, как в дрифт-симуляторах
+    const thrIn = input.throttle;
+    if (thrIn < 0.2) this.liftT = (this.liftT || 0) + dt;
+    if ((this.thrPrev ?? 0) < 0.3 && thrIn > 0.8 && (this.liftT || 0) < 0.35 && (this.liftT || 0) > 0.02 && u > 6 && this.gear > 0) this.kickT = 0.28;
+    if (thrIn >= 0.2) this.liftT = 0;
+    this.thrPrev = thrIn;
+    if (this.kickT > 0) this.kickT -= dt;
 
     let engineT = this.torqueAt(Math.max(this.rpm, s.idle)) * throttle * (limiter ? 0.1 : 1);
     if (throttle < 0.05 && Math.abs(u) > 1) engineT = -s.torque * 0.12 * clamp(this.rpm / s.redline, 0, 1); // торможение двигателем
-    let driveF = engineT * ratio * 0.88 / s.wheelRadius;
+    let driveF = engineT * ratio * 0.88 / s.wheelRadius * (this.kickT > 0 ? 1.9 : 1);
     if (this.gear === -1) {
       driveF = -Math.abs(driveF);
       if (u < -9) driveF = 0; // ограничение скорости назад
@@ -141,7 +153,15 @@ export class Vehicle {
     const offMul = this.offroad ? 0.62 : 1;
     const muF = s.muFront * grip * offMul;
     const muR = s.muRear * grip * offMul;
-    const FmaxF = muF * Fzf, FmaxR = muR * Fzr;
+    // поперечный перенос веса: внешние колёса нагружены, внутренние разгружены.
+    // Из-за «чувствительности шины к нагрузке» суммарное сцепление оси падает —
+    // ось с большей долей переноса (жёстче стабилизатор) срывается первой.
+    const trackW = s.body?.track ?? 1.55;
+    const dFz = this.m * Math.abs(this.ay) * s.cgHeight / trackW;
+    const rf = s.rollFront ?? (s.drive === 'RWD' ? 0.46 : 0.56);
+    const lsF = 1 - 0.14 * Math.min(1, (dFz * rf) / (Fzf / 2)) ** 2;
+    const lsR = 1 - 0.14 * Math.min(1, (dFz * (1 - rf)) / (Fzr / 2)) ** 2;
+    const FmaxF = muF * Fzf * lsF, FmaxR = muR * Fzr * lsR;
 
     // ---------- продольные силы ----------
     let FxF = 0, FxR = 0;
@@ -158,9 +178,17 @@ export class Vehicle {
       FxR += -sign(u) * Fb * 0.36;
     }
     // ручник: блокирует задние колёса
-    let hb = input.handbrake;
+    var hb = input.handbrake;
     if (hb > 0 && Math.abs(u) > 0.5) {
       FxR = -sign(u) * FmaxR * 0.95 * hb + FxR * (1 - hb);
+    }
+
+    // трекшн-контроль на прямой: при старте и разгоне без руля колёса не буксуют впустую.
+    // В повороте, с ручником, при «пинке» или в заносе — отключается, чтобы можно было дрифтить.
+    const straight = Math.abs(beta) < 0.1 && Math.abs(input.steer) < 0.3 && hb < 0.1 && !(this.kickT > 0);
+    if (opts.tcs !== false && straight && driveF > 0) {
+      FxR = Math.min(FxR, FmaxR * 0.97);
+      FxF = Math.min(FxF, FmaxF * 0.97);
     }
 
     // ограничение кругом трения по продольной

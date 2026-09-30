@@ -11,7 +11,7 @@ import { buildPropGeometries } from './maps.js';
 
 export const SP = 2;          // шаг точек, м
 const CH = 50;                // точек в чанке (100 м)
-const HMAX = 1.2;             // макс. отклонение курса, рад
+const HMAX = 1.45;             // макс. отклонение курса, рад
 const AHEAD_CHUNKS = 11;
 const BEHIND_CHUNKS = 3;
 export const CP_EVERY = 500;  // чекпоинт каждые 1000 м
@@ -36,19 +36,51 @@ export class Track {
 
   // ---------------- генерация осевой линии ----------------
   newSegment() {
+    if (this.queue && this.queue.length) return this.queue.shift();
     const r = this.rnd, t = this.map.track, g = this.g;
-    if (r() < 0.32) {
-      const L = t.straight[0] + r() * (t.straight[1] - t.straight[0]);
-      return { type: 'straight', L, u: 0, k: 0, ramp: 1 };
+    const straight = (L) => ({ type: 'straight', L, u: 0, k: 0, ramp: 1 });
+    // дуга: R — радиус, A — угол поворота; направление выбирается так, чтобы трасса не разворачивалась назад
+    const curve = (R, A, dir, h0) => {
+      if (Math.abs(h0 + dir * A * 0.75) > HMAX) dir = -dir;
+      if (Math.abs(h0 + dir * A * 0.75) > HMAX) A = Math.max(0.3, (HMAX - Math.abs(h0)) / 0.75);
+      const L = A * R;
+      return { seg: { type: 'curve', L, u: 0, k: dir / R, ramp: Math.min(L * 0.3, 22) }, dh: dir * A * 0.75, dir };
+    };
+    const dir0 = r() < 0.5 ? 1 : -1;
+    const roll = r();
+    if (roll < 0.14) {
+      return straight(t.straight[0] + r() * (t.straight[1] - t.straight[0]));
     }
-    // радиус: чаще средние, иногда крутые шпильки
-    const R = t.minR + Math.pow(r(), 1.4) * (t.maxR - t.minR);
-    let A = 0.35 + r() * 1.25;
-    let dir = r() < 0.5 ? 1 : -1;
-    if (Math.abs(g.h + dir * A * 0.8) > HMAX) dir = -dir;
-    if (Math.abs(g.h + dir * A * 0.8) > HMAX) A = Math.max(0.25, (HMAX - Math.abs(g.h)) / 0.8);
-    const L = A * R;
-    return { type: 'curve', L, u: 0, k: dir / R, ramp: Math.min(L * 0.32, 30) };
+    if (roll < 0.32) {
+      // S-связка / шикана: два поворота в разные стороны
+      const R = t.minR * (1 + r() * 1.4), A = 0.5 + r() * 0.7;
+      const c1 = curve(R, A, dir0, g.h);
+      const c2 = curve(R * (0.8 + r() * 0.5), A * (0.8 + r() * 0.4), -c1.dir, g.h + c1.dh);
+      this.queue = [straight(4 + r() * 18), c2.seg];
+      return c1.seg;
+    }
+    if (roll < 0.44) {
+      // шпилька: крутой длинный поворот
+      return curve(t.minR * (0.8 + r() * 0.4), 1.3 + r() * 0.9, dir0, g.h).seg;
+    }
+    if (roll < 0.54) {
+      // «сжимающийся» поворот: сначала пологий, потом крутой в ту же сторону
+      const c1 = curve(t.maxR * (0.5 + r() * 0.4), 0.4 + r() * 0.3, dir0, g.h);
+      const c2 = curve(t.minR * (1 + r() * 0.5), 0.6 + r() * 0.6, c1.dir, g.h + c1.dh);
+      this.queue = [c2.seg];
+      return c1.seg;
+    }
+    if (roll < 0.64 && t.corners) {
+      // городской поворот ~90° с короткой прямой после
+      const c = curve(t.minR * (0.9 + r() * 0.3), 1.45 + r() * 0.25, dir0, g.h);
+      this.queue = [straight(20 + r() * 50)];
+      return c.seg;
+    }
+    // обычная дуга
+    const R = t.minR + Math.pow(r(), 1.3) * (t.maxR - t.minR);
+    const res = curve(R, 0.4 + r() * 1.3, dir0, g.h);
+    if (r() < 0.5) this.queue = [straight(10 + r() * 50)];
+    return res.seg;
   }
 
   genPoint() {

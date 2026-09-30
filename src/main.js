@@ -8,13 +8,17 @@ import { buildCarModel, animateCar } from './carmodel.js';
 import { Rival } from './ai.js';
 import { GameAudio } from './audio.js';
 import { Input } from './input.js';
-import { makeSky, Smoke, Skids, Snowfall } from './fx.js';
+import { makeSky, Smoke, Skids, Snowfall, makeEnvScene, makeHorizon, makeClouds } from './fx.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { clamp, lerp, fmtTime } from './utils.js';
 
 // ======================= режимы =======================
 const MODES = [
   { id: 'race', name: 'Гонка', desc: 'Соперники, чекпоинты и таймер. Очки за дистанцию, обгоны и дрифт.', timer: 50, rivals: 5,
-    bonus: (n) => Math.max(18, 34 - n * 2) },
+    bonus: (n) => Math.max(22, 40 - n * 2) },
   { id: 'drift', name: 'Дрифт', desc: 'Только ты и трасса. Очки за занос, чекпоинты и длинные серии добавляют время.', timer: 60, rivals: 0,
     bonus: (n) => Math.max(26, 42 - n * 1.5) },
   { id: 'free', name: 'Свободная езда', desc: 'Без таймера и давления. Катайся по бесконечной трассе и тренируй дрифт.', timer: 0, rivals: 3,
@@ -59,9 +63,25 @@ function applyQuality() {
   }
   resize();
 }
+let composer = null, bloom = null;
+function setupComposer() {
+  if (+settings.quality === 2) {
+    if (!composer) {
+      composer = new EffectComposer(renderer);
+      composer.addPass(new RenderPass(scene, camera));
+      bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.5, 0.45, 0.85);
+      composer.addPass(bloom);
+      composer.addPass(new OutputPass());
+    }
+    composer.setPixelRatio(renderer.getPixelRatio());
+    composer.setSize(innerWidth, innerHeight);
+    if (W) { bloom.strength = W.map.night ? 0.55 : 0.18; bloom.threshold = W.map.night ? 0.72 : 0.96; bloom.radius = 0.35; }
+  } else if (composer) { composer.dispose(); composer = null; bloom = null; }
+}
 function resize() {
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false);
+  setupComposer();
   camera.aspect = w / h;
   updateViewOffset();
   camera.updateProjectionMatrix();
@@ -82,6 +102,7 @@ addEventListener('pointerdown', () => audio.init(), { once: false });
 addEventListener('keydown', () => audio.init(), { once: true });
 
 // ======================= мир =======================
+let W_env = null;
 let W = null;       // текущий мир (карта, трасса, свет, машины)
 let G = null;       // состояние заезда
 let state = 'loading';
@@ -103,7 +124,10 @@ function buildWorld(mapIdx, seed) {
   scene.add(group);
   scene.fog = new THREE.Fog(map.fog.color, map.fog.near, map.fog.far);
   scene.background = new THREE.Color(map.fog.color);
-  scene.environmentIntensity = map.night ? 0.35 : 1.0;
+  if (W_env) W_env.dispose();
+  W_env = pmrem.fromScene(makeEnvScene(map), 0.02).texture;
+  scene.environment = W_env;
+  scene.environmentIntensity = map.night ? 0.7 : 1.0;
   renderer.toneMappingExposure = map.night ? 1.15 : 1.0;
 
   const hemi = new THREE.HemisphereLight(map.hemi.sky, map.hemi.ground, map.hemi.intensity);
@@ -116,12 +140,14 @@ function buildWorld(mapIdx, seed) {
   group.add(sun); group.add(sun.target);
 
   const sky = makeSky(map); group.add(sky);
+  const horizon = makeHorizon(map); horizon.position.y = horizon.userData.h / 2 - 45; sky.add(horizon);
+  sky.add(makeClouds(map));
   const track = new Track(group, map, seed, +settings.quality);
   const farPlane = new THREE.Mesh(new THREE.PlaneGeometry(5000, 5000), new THREE.MeshLambertMaterial({ color: map.ground.far }));
   farPlane.rotation.x = -Math.PI / 2; group.add(farPlane);
 
   const smokeColor = { desert: 0xe6ddd0, snow: 0xffffff, city: 0xb8b8c8 }[map.id];
-  const smoke = new Smoke(group, smokeColor, settings.quality > 0 ? 320 : 140);
+  const smoke = new Smoke(group, smokeColor, settings.quality > 0 ? 260 : 120);
   const dust = new Smoke(group, { desert: 0xcf9f6c, snow: 0xf4f8ff, city: 0x77777f }[map.id], 120);
   const skids = new Skids(group, settings.quality > 0 ? 3000 : 1200, map.id === 'snow' ? 0x7d8898 : 0x0c0c0c, map.id === 'snow' ? 0.4 : 0.6);
   const snow = map.weather === 'snow' ? new Snowfall(group, settings.quality > 0 ? 2600 : 900) : null;
@@ -185,10 +211,12 @@ function updateCamera(dt, instant = false) {
   const spd = veh.speed;
   const fwdX = Math.sin(veh.h), fwdZ = Math.cos(veh.h);
   const cy = veh.roadY;
-  let target = veh.h;
-  if (spd > 4 && veh.u > 0) target = veh.h + angDiff(Math.atan2(veh.vx, veh.vz), veh.h) * 0.55;
+  // камера частично смотрит по направлению скорости (красиво в дрифте), но вес меняется плавно
+  // и угол ограничен — при ударах и откатах назад камеру не дёргает
+  const w = clamp((veh.u - 3) / 8, 0, 1) * 0.45;
+  const target = veh.h + clamp(angDiff(Math.atan2(veh.vx, veh.vz), veh.h), -0.7, 0.7) * w;
   if (instant) cam.h = target;
-  cam.h += angDiff(target, cam.h) * Math.min(1, dt * 4.5);
+  cam.h += angDiff(target, cam.h) * Math.min(1, dt * 3.5);
   const k = instant ? 1 : 1 - Math.exp(-dt * 9);
   let fov = 60 + Math.min(20, spd * 0.24);
   const des = new THREE.Vector3(), look = new THREE.Vector3();
@@ -269,9 +297,18 @@ function showMsg(text, dur = 1.6, color = '#fff') {
   clearTimeout(showMsg._t); showMsg._t = setTimeout(() => m.classList.remove('show'), dur * 1000);
 }
 
+let lastCrash = 0;
+function crashFx(impact) {
+  // звук и тряска не чаще 3 раз в секунду (раньше звук создавался на каждом шаге физики — лагало)
+  const now = performance.now();
+  if (now - lastCrash < 330) return false;
+  lastCrash = now;
+  audio.crash(Math.min(impact, 25));
+  cam.shake = Math.min(0.5, impact / 25);
+  return true;
+}
 function onHit(impact) {
-  audio.crash(impact);
-  cam.shake = Math.min(1.2, impact / 12);
+  if (!crashFx(impact)) return;
   G.hits++;
   if (G.drift.active && G.drift.pts > 0 && impact > 3) {
     const el = $('drift-pts');
@@ -338,7 +375,7 @@ function collideRivals() {
       // закрутка от удара в перед/зад
       const cross = hit.a * (Math.sin(veh.h) * hit.nz - Math.cos(veh.h) * hit.nx);
       veh.r += cross * j / veh.I * 0.6;
-      if (vn > 2) { audio.crash(vn * 1.5); cam.shake = Math.min(1, vn / 8); if (G) G.hits++; }
+      if (vn > 2 && crashFx(vn * 1.5) && G) G.hits++;
     }
   }
 }
@@ -372,7 +409,7 @@ function updateRace(dt) {
   G.braking = inp.brake > 0.1 && veh.u > 0.5;
 
   // соперники
-  for (const r of W.rivals) r.update(dt, track, { idx: veh.idx, lat: veh.lat }, G.started);
+  for (const r of W.rivals) r.update(dt, track, { idx: veh.idx, lat: veh.lat, t: G.elapsed }, G.started);
   if (state !== 'countdown') collideRivals();
   track.update(veh.idx);
 
@@ -493,16 +530,16 @@ function updateFx(dt, inp) {
   for (const side of [1, -1]) {
     const [x, z] = wheelPos(b.wheelR, side * b.track / 2);
     if (slip > 0.35 && spd > 2 && !veh.offroad) {
-      if (Math.random() < (q > 0 ? 0.9 : 0.4)) W.smoke.emit(x, veh.roadY, z, veh.vx, veh.vz, slip, W.map.night ? 0.35 : 0.5);
+      if (Math.random() < (q > 0 ? 40 : 20) * dt) W.smoke.emit(x, veh.roadY, z, veh.vx, veh.vz, slip, W.map.night ? 0.22 : 0.32);
     }
-    if (veh.offroad && spd > 4 && Math.random() < 0.6) W.dust.emit(x, veh.roadY, z, veh.vx, veh.vz, 1, 0.55);
+    if (veh.offroad && spd > 4 && Math.random() < 30 * dt) W.dust.emit(x, veh.roadY, z, veh.vx, veh.vz, 1, 0.55);
     W.skids.add(side > 0 ? 0 : 1, x, veh.roadY, z, lx, lz, !veh.offroad && slip > 0.42 ? Math.min(1, (slip - 0.3) * 1.6) : 0);
     const [fx, fz] = wheelPos(b.wheelF, side * b.track / 2);
     W.skids.add(side > 0 ? 2 : 3, fx, veh.roadY, fz, lx, lz, !veh.offroad && (veh.frontSlide > 0.85 || (inp.brake > 0.5 && spd > 15 && veh.u > 0 && veh.lockR > 0)) ? 0.6 : 0);
   }
   // соперники тоже дымят в поворотах
   for (const r of W.rivals) {
-    if (Math.abs(r.pose.k) * r.v * r.v > 7 && Math.random() < 0.25) W.smoke.emit(r.x, r.y, r.z, r.vx, r.vz, 0.6, 0.25);
+    if (Math.abs(r.pose.k) * r.v * r.v > 7 && Math.random() < 12 * dt) W.smoke.emit(r.x, r.y, r.z, r.vx, r.vz, 0.6, 0.25);
   }
   W.smoke.update(dt); W.dust.update(dt);
   if (W.snow) W.snow.update(dt, camera);
@@ -761,7 +798,7 @@ function frame(now) {
     G._events = evs;
     updateRace(dt);
   }
-  renderer.render(scene, camera);
+  if (composer) composer.render(); else renderer.render(scene, camera);
 }
 
 // старт

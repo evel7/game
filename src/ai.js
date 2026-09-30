@@ -35,10 +35,12 @@ export class Rival {
     }
     // резинка относительно игрока
     const gap = player.idx - this.fi; // >0 — соперник позади
-    if (gap > 0) target *= 1 + Math.min(0.22, gap / 300);
+    // «резинка» включается не сразу — на старте все разгоняются честно
+    if (gap > 0 && (player.t ?? 99) > 12) target *= 1 + Math.min(0.2, gap / 300);
     else if (gap < -120) target *= 0.86;
     if (this.bump > 0) { this.bump -= dt; target *= 0.7; }
-    this.v += clamp(target - this.v, -9 * dt, 5.5 * dt);
+    const acc = 5.0 * (1 - 0.65 * Math.min(1, this.v / this.top)); // разгон слабеет с ростом скорости, как у настоящей машины
+    this.v += clamp(target - this.v, -9 * dt, acc * dt);
     this.v = Math.max(0, this.v);
 
     // смена полосы и объезд игрока
