@@ -20,7 +20,7 @@ const MODES = [
   { id: 'free', name: 'Свободная езда', desc: 'Без таймера и давления. Катайся по бесконечной трассе и тренируй дрифт.', timer: 0, rivals: 3,
     bonus: () => 0 },
 ];
-const STEP = 1 / 120;
+const STEP = 1 / 240; // физика 240 шагов/с — плавно даже на мониторах 144–240 Гц
 const CP_FIRST_IDX = 400;
 
 // ======================= сохранения =======================
@@ -30,7 +30,7 @@ const store = {
 };
 const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 if (isTouch) document.body.classList.add('touch');
-const settings = Object.assign({ vol: 0.8, music: true, assist: true, manual: false, quality: isTouch ? 0 : 1, camera: 0, units: 'kmh' }, store.get('settings', {}));
+const settings = Object.assign({ vol: 0.8, music: true, assist: true, manual: false, quality: isTouch ? 0 : 1, camera: 0, units: 'kmh', fps: 120, showFps: false }, store.get('settings', {}));
 const sel = Object.assign({ car: 0, colors: {}, mode: 0, map: 0 }, store.get('sel', {}));
 let records = store.get('records', {});
 const saveSettings = () => store.set('settings', settings);
@@ -366,8 +366,8 @@ function updateRace(dt) {
     for (const e of evs) { if (e === 'shiftUp') inp.shiftUp = true; if (e === 'shiftDown') inp.shiftDown = true; }
     G.acc += dt;
     let n = 0;
-    while (G.acc >= STEP && n < 12) { G.acc -= STEP; physicsStep(inp); n++; }
-    if (n === 12) G.acc = 0;
+    while (G.acc >= STEP && n < 24) { G.acc -= STEP; physicsStep(inp); n++; }
+    if (n === 24) G.acc = 0;
   }
   G.braking = inp.brake > 0.1 && veh.u > 0.5;
 
@@ -689,6 +689,7 @@ $('btn-reset-rec').addEventListener('click', () => { if (confirm('Удалить
 function renderSettings() {
   $('set-vol').value = settings.vol; $('set-music').checked = settings.music; $('set-assist').checked = settings.assist;
   $('set-manual').checked = settings.manual; $('set-quality').value = settings.quality; $('set-camera').value = settings.camera; $('set-units').value = settings.units;
+  $('set-fps').value = settings.fps; $('set-showfps').checked = settings.showFps;
 }
 $('set-vol').addEventListener('input', (e) => { settings.vol = +e.target.value; audio.setVolume(settings.vol); saveSettings(); });
 $('set-music').addEventListener('change', (e) => { settings.music = e.target.checked; audio.setMusic(settings.music); saveSettings(); });
@@ -697,6 +698,8 @@ $('set-manual').addEventListener('change', (e) => { settings.manual = e.target.c
 $('set-quality').addEventListener('change', (e) => { settings.quality = +e.target.value; saveSettings(); buildWorld(sel.map, 7); });
 $('set-camera').addEventListener('change', (e) => { settings.camera = +e.target.value; saveSettings(); });
 $('set-units').addEventListener('change', (e) => { settings.units = e.target.value; saveSettings(); });
+$('set-fps').addEventListener('change', (e) => { settings.fps = +e.target.value; saveSettings(); });
+$('set-showfps').addEventListener('change', (e) => { settings.showFps = e.target.checked; saveSettings(); });
 
 // пауза / итоги
 function pause() { if (state !== 'race' && state !== 'countdown') return; G.prevState = state; state = 'paused'; showScreen('pause'); audio.update(W.player.veh, W.player.veh.spec, 0, 0, false, 0, false); }
@@ -730,10 +733,18 @@ function handleEvents(evs) {
 
 // ======================= главный цикл =======================
 let last = performance.now();
+const fpsMeter = { frames: 0, t: performance.now(), value: 0 };
 function frame(now) {
   requestAnimationFrame(frame);
+  // ограничение FPS (0 = без ограничений; выше частоты монитора браузер всё равно не рисует)
+  if (settings.fps > 0 && now - last < 1000 / settings.fps - 0.7) return;
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
+  fpsMeter.frames++;
+  if (now - fpsMeter.t >= 500) {
+    fpsMeter.value = Math.round(fpsMeter.frames * 1000 / (now - fpsMeter.t)); fpsMeter.frames = 0; fpsMeter.t = now;
+    const el = $('fps'); el.classList.toggle('hidden', !settings.showFps); if (settings.showFps) el.textContent = `${fpsMeter.value} FPS`;
+  }
   const evs = input.takeEvents();
   handleEvents(evs);
   if (!W) return;
