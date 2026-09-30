@@ -1,0 +1,13 @@
+{
+  "name": "endless-drift",
+  "version": "1.0.0",
+  "description": "Бесконечная 3D-гонка с дрифтом на HTML5 (Three.js)",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/main.js --bundle --minify --format=iife --target=es2019 --outfile=dist/game.js",
+    "dev": "esbuild src/main.js --bundle --format=iife --outfile=dist/game.js --watch --servedir=."
+  },
+  "dependencies": { "three": "0.169.0" },
+  "devDependencies": { "esbuild": "^0.24.0" },
+  "license": "MIT"
+}

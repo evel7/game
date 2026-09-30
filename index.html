@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Endless Drift — бесконечная 3D-гонка на HTML5</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- ===== Загрузка ===== -->
+  <div id="loading" class="screen show"><div class="logo">ENDLESS<span>DRIFT</span></div><div class="load-text">Загрузка…</div></div>
+
+  <!-- ===== Главное меню ===== -->
+  <div id="menu-main" class="screen panel-left">
+    <div class="logo">ENDLESS<span>DRIFT</span></div>
+    <div class="subtitle">бесконечная 3D-гонка</div>
+    <button class="btn big" data-go="setup">▶ Играть</button>
+    <button class="btn" data-go="garage">🚗 Гараж</button>
+    <button class="btn" data-go="records">🏆 Рекорды</button>
+    <button class="btn" data-go="settings">⚙ Настройки</button>
+    <button class="btn" data-go="controls">🎮 Управление</button>
+    <div class="foot">Все машины, трассы и звуки созданы процедурно — без чужих моделей и музыки.</div>
+  </div>
+
+  <!-- ===== Выбор режима и карты ===== -->
+  <div id="menu-setup" class="screen panel-wide">
+    <h2>Режим</h2>
+    <div class="cards" id="mode-cards"></div>
+    <h2>Карта</h2>
+    <div class="cards" id="map-cards"></div>
+    <div class="setup-bottom">
+      <div class="setup-car">Машина: <b id="setup-car-name"></b> <button class="btn small" data-go="garage">сменить</button></div>
+      <div class="row">
+        <button class="btn" data-go="main">← Назад</button>
+        <button class="btn big accent" id="btn-start">СТАРТ</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Гараж ===== -->
+  <div id="menu-garage" class="screen panel-left">
+    <h2>Гараж</h2>
+    <div class="car-switch">
+      <button class="btn arrow" id="car-prev">◀</button>
+      <div><div class="car-name" id="car-name"></div><div class="car-tag" id="car-tag"></div></div>
+      <button class="btn arrow" id="car-next">▶</button>
+    </div>
+    <div class="car-desc" id="car-desc"></div>
+    <div class="stats" id="car-stats"></div>
+    <div class="car-spec" id="car-spec"></div>
+    <div class="swatches" id="car-colors"></div>
+    <div class="row">
+      <button class="btn" data-go="main">← Меню</button>
+      <button class="btn accent" data-go="setup">Выбрать ✓</button>
+    </div>
+  </div>
+
+  <!-- ===== Рекорды ===== -->
+  <div id="menu-records" class="screen panel-left">
+    <h2>Рекорды</h2>
+    <div id="records-table"></div>
+    <div class="row"><button class="btn" data-go="main">← Меню</button><button class="btn small" id="btn-reset-rec">Сбросить</button></div>
+  </div>
+
+  <!-- ===== Настройки ===== -->
+  <div id="menu-settings" class="screen panel-left">
+    <h2>Настройки</h2>
+    <label class="opt">Громкость <input type="range" id="set-vol" min="0" max="1" step="0.05" /></label>
+    <label class="opt">Музыка <input type="checkbox" id="set-music" /></label>
+    <label class="opt">Помощь в дрифте (авто-контрруль) <input type="checkbox" id="set-assist" /></label>
+    <label class="opt">Ручная коробка (E / Q) <input type="checkbox" id="set-manual" /></label>
+    <label class="opt">Графика
+      <select id="set-quality"><option value="0">Низкая (слабые ПК/телефоны)</option><option value="1">Средняя</option><option value="2">Высокая</option></select>
+    </label>
+    <label class="opt">Камера по умолчанию
+      <select id="set-camera"><option value="0">Сзади</option><option value="1">Сзади, дальняя</option><option value="2">С капота</option><option value="3">Кинокамера</option></select>
+    </label>
+    <label class="opt">Спидометр <select id="set-units"><option value="kmh">км/ч</option><option value="mph">mph</option></select></label>
+    <div class="row"><button class="btn" data-go="main">← Меню</button></div>
+  </div>
+
+  <!-- ===== Управление ===== -->
+  <div id="menu-controls" class="screen panel-left">
+    <h2>Управление</h2>
+    <table class="keys">
+      <tr><td><kbd>W</kbd> / <kbd>↑</kbd></td><td>Газ</td></tr>
+      <tr><td><kbd>S</kbd> / <kbd>↓</kbd></td><td>Тормоз, задний ход</td></tr>
+      <tr><td><kbd>A</kbd> <kbd>D</kbd> / <kbd>←</kbd> <kbd>→</kbd></td><td>Руль</td></tr>
+      <tr><td><kbd>Пробел</kbd></td><td>Ручник (для заноса)</td></tr>
+      <tr><td><kbd>C</kbd></td><td>Сменить камеру</td></tr>
+      <tr><td><kbd>R</kbd></td><td>Вернуться на трассу</td></tr>
+      <tr><td><kbd>E</kbd> / <kbd>Q</kbd></td><td>Передача вверх / вниз (ручная коробка)</td></tr>
+      <tr><td><kbd>M</kbd></td><td>Звук вкл/выкл</td></tr>
+      <tr><td><kbd>Esc</kbd> / <kbd>P</kbd></td><td>Пауза</td></tr>
+    </table>
+    <p class="hint">Геймпад: стик — руль, RT — газ, LT — тормоз, B/RB — ручник, Y — камера, Start — пауза.<br/>
+      На телефоне появляются сенсорные кнопки.</p>
+    <p class="hint"><b>Как дрифтовать:</b> разгонись, резко поверни и дёрни ручник (пробел) — задок сорвётся. Держи газ и контррулём ловишь угол. Чем больше угол и скорость, тем больше очков, а длинная серия увеличивает множитель. Удар о стену сжигает серию.</p>
+    <div class="row"><button class="btn" data-go="main">← Меню</button></div>
+  </div>
+
+  <!-- ===== HUD ===== -->
+  <div id="hud" class="hidden">
+    <div class="hud-tl">
+      <div class="hud-mode" id="hud-mode"></div>
+      <div class="hud-small" id="hud-sub"></div>
+    </div>
+    <div class="hud-tc">
+      <div class="hud-timer" id="hud-timer"></div>
+      <div class="hud-next" id="hud-next"></div>
+    </div>
+    <div class="hud-tr">
+      <div class="hud-score" id="hud-score">0</div>
+      <div class="hud-small" id="hud-dist"></div>
+    </div>
+    <div class="drift" id="hud-drift"><div class="drift-pts" id="drift-pts"></div><div class="drift-info" id="drift-info"></div></div>
+    <div class="msg" id="hud-msg"></div>
+    <canvas id="minimap" width="170" height="170"></canvas>
+    <div class="gauge"><canvas id="gauge" width="220" height="220"></canvas></div>
+    <div class="cam-hint" id="cam-hint"></div>
+  </div>
+
+  <!-- ===== Сенсорное управление ===== -->
+  <div id="touch" class="hidden">
+    <div class="t-left">
+      <div class="tbtn" data-touch="left">◀</div>
+      <div class="tbtn" data-touch="right">▶</div>
+    </div>
+    <div class="t-right">
+      <div class="tbtn hb" data-touch="hb">РУЧНИК</div>
+      <div class="tcol">
+        <div class="tbtn gas" data-touch="gas">ГАЗ</div>
+        <div class="tbtn brake" data-touch="brake">ТОРМОЗ</div>
+      </div>
+    </div>
+    <div class="t-top">
+      <div class="tsmall" data-tap="camera">🎥</div>
+      <div class="tsmall" data-tap="reset">↺</div>
+      <div class="tsmall" data-tap="pause">❚❚</div>
+    </div>
+  </div>
+
+  <!-- ===== Пауза ===== -->
+  <div id="menu-pause" class="screen center-box">
+    <h2>Пауза</h2>
+    <button class="btn big" id="btn-resume">Продолжить</button>
+    <button class="btn" id="btn-restart">Заново</button>
+    <button class="btn" id="btn-tomenu">В главное меню</button>
+  </div>
+
+  <!-- ===== Итоги ===== -->
+  <div id="menu-over" class="screen center-box">
+    <h2 id="over-title">Время вышло!</h2>
+    <div class="over-record" id="over-record">🏆 НОВЫЙ РЕКОРД!</div>
+    <div id="over-stats"></div>
+    <button class="btn big accent" id="btn-again">Ещё раз</button>
+    <button class="btn" id="btn-over-menu">В меню</button>
+  </div>
+
+  <div id="countdown"></div>
+
+  <script src="dist/game.js"></script>
+</body>
+</html>
