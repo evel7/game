@@ -34,7 +34,7 @@ const store = {
 };
 const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 if (isTouch) document.body.classList.add('touch');
-const settings = Object.assign({ vol: 0.8, music: true, assist: true, manual: false, quality: isTouch ? 0 : 1, camera: 0, units: 'kmh', fps: 120, showFps: false }, store.get('settings', {}));
+const settings = Object.assign({ vol: 0.8, music: true, assist: true, manual: false, quality: isTouch ? 0 : 1, camera: 0, units: 'kmh', fps: 120, showFps: false, sfxVol: 0.8, musicVol: 0.3 }, store.get('settings', {}));
 const sel = Object.assign({ car: 0, colors: {}, mode: 0, map: 0 }, store.get('sel', {}));
 let records = store.get('records', {});
 const saveSettings = () => store.set('settings', settings);
@@ -95,7 +95,7 @@ function updateViewOffset() {
 addEventListener('resize', resize);
 
 const audio = new GameAudio();
-audio.setVolume(settings.vol); audio.musicOn = settings.music;
+audio.setVolume(settings.vol); audio.musicOn = settings.music; audio.sfxVol = settings.sfxVol; audio.musicVol = settings.musicVol;
 const input = new Input();
 input.bindTouch($('touch'));
 addEventListener('pointerdown', () => audio.init(), { once: false });
@@ -147,8 +147,8 @@ function buildWorld(mapIdx, seed) {
   farPlane.rotation.x = -Math.PI / 2; group.add(farPlane);
 
   const smokeColor = { desert: 0xe6ddd0, snow: 0xffffff, city: 0xb8b8c8 }[map.id];
-  const smoke = new Smoke(group, smokeColor, settings.quality > 0 ? 260 : 120);
-  const dust = new Smoke(group, { desert: 0xcf9f6c, snow: 0xf4f8ff, city: 0x77777f }[map.id], 120);
+  const smoke = new Smoke(group, smokeColor, settings.quality > 0 ? 90 : 50);
+  const dust = new Smoke(group, { desert: 0xcf9f6c, snow: 0xf4f8ff, city: 0x77777f }[map.id], 40);
   const skids = new Skids(group, settings.quality > 0 ? 3000 : 1200, map.id === 'snow' ? 0x7d8898 : 0x0c0c0c, map.id === 'snow' ? 0.4 : 0.6);
   const snow = map.weather === 'snow' ? new Snowfall(group, settings.quality > 0 ? 2600 : 900) : null;
 
@@ -164,8 +164,7 @@ function spawnPlayer(idx, lat) {
   if (W.player) { W.group.remove(W.player.model.root); }
   const model = buildCarModel(spec, carColor(spec), { night: W.map.night });
   model._tailBase = W.map.night ? 1.2 : 0.35;
-  model.root.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-  W.group.add(model.root);
+    W.group.add(model.root);
   const veh = new Vehicle(spec);
   const p = W.track.P(idx);
   veh.reset(p.x + p.lx * lat, p.z + p.lz * lat, p.h);
@@ -529,17 +528,17 @@ function updateFx(dt, inp) {
   const q = +settings.quality;
   for (const side of [1, -1]) {
     const [x, z] = wheelPos(b.wheelR, side * b.track / 2);
-    if (slip > 0.35 && spd > 2 && !veh.offroad) {
-      if (Math.random() < (q > 0 ? 40 : 20) * dt) W.smoke.emit(x, veh.roadY, z, veh.vx, veh.vz, slip, W.map.night ? 0.22 : 0.32);
+    if (slip > 0.4 && spd > 5 && !veh.offroad) {
+      if (Math.random() < (q > 0 ? 14 : 8) * dt) W.smoke.emit(x, veh.roadY, z, veh.vx, veh.vz, slip, W.map.night ? 0.22 : 0.32);
     }
-    if (veh.offroad && spd > 4 && Math.random() < 30 * dt) W.dust.emit(x, veh.roadY, z, veh.vx, veh.vz, 1, 0.55);
+    if (veh.offroad && spd > 4 && Math.random() < 10 * dt) W.dust.emit(x, veh.roadY, z, veh.vx, veh.vz, 1, 0.55);
     W.skids.add(side > 0 ? 0 : 1, x, veh.roadY, z, lx, lz, !veh.offroad && slip > 0.42 ? Math.min(1, (slip - 0.3) * 1.6) : 0);
     const [fx, fz] = wheelPos(b.wheelF, side * b.track / 2);
     W.skids.add(side > 0 ? 2 : 3, fx, veh.roadY, fz, lx, lz, !veh.offroad && (veh.frontSlide > 0.85 || (inp.brake > 0.5 && spd > 15 && veh.u > 0 && veh.lockR > 0)) ? 0.6 : 0);
   }
   // соперники тоже дымят в поворотах
   for (const r of W.rivals) {
-    if (Math.abs(r.pose.k) * r.v * r.v > 7 && Math.random() < 12 * dt) W.smoke.emit(r.x, r.y, r.z, r.vx, r.vz, 0.6, 0.25);
+    if (Math.abs(r.pose.k) * r.v * r.v > 7 && Math.random() < 4 * dt) W.smoke.emit(r.x, r.y, r.z, r.vx, r.vz, 0.6, 0.25);
   }
   W.smoke.update(dt); W.dust.update(dt);
   if (W.snow) W.snow.update(dt, camera);
@@ -726,9 +725,12 @@ $('btn-reset-rec').addEventListener('click', () => { if (confirm('Удалить
 function renderSettings() {
   $('set-vol').value = settings.vol; $('set-music').checked = settings.music; $('set-assist').checked = settings.assist;
   $('set-manual').checked = settings.manual; $('set-quality').value = settings.quality; $('set-camera').value = settings.camera; $('set-units').value = settings.units;
+  $('set-sfx').value = settings.sfxVol; $('set-musicvol').value = settings.musicVol;
   $('set-fps').value = settings.fps; $('set-showfps').checked = settings.showFps;
 }
 $('set-vol').addEventListener('input', (e) => { settings.vol = +e.target.value; audio.setVolume(settings.vol); saveSettings(); });
+$('set-sfx').addEventListener('input', (e) => { settings.sfxVol = +e.target.value; audio.setSfxVol(settings.sfxVol); saveSettings(); });
+$('set-musicvol').addEventListener('input', (e) => { settings.musicVol = +e.target.value; audio.setMusicVol(settings.musicVol); saveSettings(); });
 $('set-music').addEventListener('change', (e) => { settings.music = e.target.checked; audio.setMusic(settings.music); saveSettings(); });
 $('set-assist').addEventListener('change', (e) => { settings.assist = e.target.checked; saveSettings(); });
 $('set-manual').addEventListener('change', (e) => { settings.manual = e.target.checked; saveSettings(); });
@@ -809,4 +811,4 @@ showScreen('main');
 requestAnimationFrame(frame);
 
 // для отладки/тестов
-window.__game = { get W() { return W; }, get G() { return G; }, get state() { return state; }, startRace, showScreen, sel, settings, cam };
+window.__game = { renderer, get W() { return W; }, get G() { return G; }, get state() { return state; }, startRace, showScreen, sel, settings, cam };

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 // Процедурные 3D-модели машин. Всё строится кодом — никаких чужих моделей.
 // Кузов: боковой профиль (сглаженный) → выдавливание → деформация (сужение носа/кормы и верха),
@@ -12,7 +13,7 @@ const M = {
   glass: new THREE.MeshPhysicalMaterial({ color: 0x1b2633, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.55, envMapIntensity: 1.6, depthWrite: false }),
   black: new THREE.MeshStandardMaterial({ color: 0x121214, roughness: 0.65 }),
   gloss: new THREE.MeshStandardMaterial({ color: 0x0c0c0e, roughness: 0.25, metalness: 0.3 }),
-  trim: new THREE.MeshStandardMaterial({ color: 0x1e1e22, roughness: 0.5, metalness: 0.2 }),
+  trim: new THREE.MeshStandardMaterial({ color: 0x1e1e22, roughness: 0.6, metalness: 0.05 }),
   chrome: new THREE.MeshStandardMaterial({ color: 0xe6e8ec, roughness: 0.12, metalness: 1.0 }),
   tire: new THREE.MeshStandardMaterial({ color: 0x19191b, roughness: 0.92 }),
   disc: new THREE.MeshStandardMaterial({ color: 0x77787c, roughness: 0.35, metalness: 0.9 }),
@@ -151,6 +152,39 @@ function aoTex() {
   })();
 }
 
+// Склеивает все неподвижные детали группы в один меш на каждый материал.
+// Машина остаётся такой же детальной, но рисуется за ~20 вызовов вместо ~150 — сильно меньше нагрузки.
+function mergeByMaterial(root) {
+  root.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+  const buckets = new Map();
+  const meshes = [];
+  root.traverse((o) => { if (o.isMesh) meshes.push(o); });
+  const tmp = new THREE.Matrix4();
+  for (const o of meshes) {
+    let g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+    for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+    if (!g.attributes.normal) g.computeVertexNormals();
+    if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+    g.applyMatrix4(tmp.multiplyMatrices(inv, o.matrixWorld));
+    const key = o.material.uuid;
+    if (!buckets.has(key)) buckets.set(key, { mat: o.material, list: [], order: o.renderOrder });
+    buckets.get(key).list.push(g);
+    o.parent.remove(o);
+    o.geometry.dispose();
+  }
+  for (const { mat, list, order } of buckets.values()) {
+    const merged = mergeGeometries(list);
+    list.forEach((g) => g.dispose());
+    const m = new THREE.Mesh(merged, mat);
+    m.renderOrder = order;
+    // тень отбрасывают кузов, стёкла (чтобы у тени не было «дыры» на месте кабины) и шины
+    m.castShadow = !(mat === M.lensClear) && !(mat.transparent && mat !== M.glass);
+    m.receiveShadow = mat !== M.glass;
+    root.add(m);
+  }
+}
+
 // ---------- колесо ----------
 function buildWheel(r, width, st, sx) {
   const wheel = new THREE.Group();
@@ -159,7 +193,7 @@ function buildWheel(r, width, st, sx) {
   const tg = new THREE.LatheGeometry(prof.map(([a, b]) => new THREE.Vector2(a, b)), 28);
   tg.rotateZ(Math.PI / 2);
   const tire = new THREE.Mesh(tg, M.tire); tire.castShadow = true; wheel.add(tire);
-  const rimMat = new THREE.MeshStandardMaterial({ color: st.rim, roughness: 0.22, metalness: 0.85 });
+  const rimMat = new THREE.MeshStandardMaterial({ color: st.rim, roughness: 0.3, metalness: 0.6 });
   // обод (бочка)
   const barrel = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.7, r * 0.7, width * 0.92, 24, 1, true).rotateZ(Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x3a3b3f, metalness: 0.8, roughness: 0.4, side: THREE.DoubleSide }));
   wheel.add(barrel);
@@ -478,8 +512,9 @@ export function buildCarModel(spec, color, opts = {}) {
   const root = new THREE.Group();
   chassis.add(group);
   for (const w of wheels) { group.remove(w.pivot); root.add(w.pivot); }
+  mergeByMaterial(group);
+  for (const w of wheels) { mergeByMaterial(w.wheel); w.pivot.children.forEach((c) => { if (c.isMesh) c.castShadow = false; }); }
   root.add(chassis); root.add(shadow);
-  root.traverse((o) => { if (o.isMesh && o.material !== M.glass && !o.material.transparent) o.castShadow = true; });
 
   return { root, chassis, wheels, bodyMat, headMat, tailMat, spec };
 }

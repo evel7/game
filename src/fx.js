@@ -76,8 +76,8 @@ export class Smoke {
     const i = this.next; this.next = (this.next + 1) % this.max;
     this.pos[i * 3] = x + (Math.random() - 0.5) * 0.3; this.pos[i * 3 + 1] = y + 0.55; this.pos[i * 3 + 2] = z + (Math.random() - 0.5) * 0.3;
     this.vel[i * 3] = vx * 0.25 + (Math.random() - 0.5) * 1.2; this.vel[i * 3 + 1] = 0.5 + Math.random() * 0.7; this.vel[i * 3 + 2] = vz * 0.25 + (Math.random() - 0.5) * 1.2;
-    this.life[i] = 0; this.maxLife[i] = 1.0 + Math.random() * 1.2 * amount;
-    this.base[i] = 0.8 + Math.random() * 0.5; this.op[i] = opacity;
+    this.life[i] = 0; this.maxLife[i] = 1.4 + Math.random() * 0.8 * amount;
+    this.base[i] = 1.4 + Math.random() * 0.6; this.op[i] = opacity;
   }
   update(dt) {
     const k = 1 - dt * 1.5;
@@ -179,8 +179,8 @@ export function makeEnvScene(map) {
   const mat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     uniforms: {
-      top: { value: new THREE.Color(map.sky.top) }, horizon: { value: new THREE.Color(map.sky.horizon) },
-      ground: { value: new THREE.Color(map.ground.far).multiplyScalar(map.night ? 0.3 : 0.8) },
+      top: { value: new THREE.Color(map.sky.top) }, horizon: { value: new THREE.Color(map.sky.horizon).lerp(new THREE.Color(0xdde3ea), map.night ? 0 : 0.45) },
+      ground: { value: new THREE.Color(map.ground.far).lerp(new THREE.Color(0x5a5a5e), 0.7).multiplyScalar(map.night ? 0.25 : 0.55) },
     },
     vertexShader: 'varying vec3 vp; void main(){ vp = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
     fragmentShader: `uniform vec3 top; uniform vec3 horizon; uniform vec3 ground; varying vec3 vp;

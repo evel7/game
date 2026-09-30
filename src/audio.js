@@ -4,7 +4,7 @@
 
 export class GameAudio {
   constructor() {
-    this.ctx = null; this.enabled = true; this.volume = 0.8; this.musicOn = true; this.musicVol = 0.35;
+    this.ctx = null; this.enabled = true; this.volume = 0.8; this.musicOn = true; this.musicVol = 0.3; this.sfxVol = 0.8;
   }
 
   init() {
@@ -12,8 +12,12 @@ export class GameAudio {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     const ctx = this.ctx = new AC();
-    this.master = ctx.createGain(); this.master.gain.value = this.volume; this.master.connect(ctx.destination);
-    this.sfx = ctx.createGain(); this.sfx.connect(this.master);
+    // компрессор выравнивает громкость: тихое не теряется, громкое не «бьёт по ушам»
+    this.comp = ctx.createDynamicsCompressor();
+    this.comp.threshold.value = -20; this.comp.knee.value = 12; this.comp.ratio.value = 4; this.comp.attack.value = 0.005; this.comp.release.value = 0.2;
+    this.comp.connect(ctx.destination);
+    this.master = ctx.createGain(); this.master.gain.value = this.volume; this.master.connect(this.comp);
+    this.sfx = ctx.createGain(); this.sfx.gain.value = this.sfxVol; this.sfx.connect(this.master);
     this.musicBus = ctx.createGain(); this.musicBus.gain.value = this.musicOn ? this.musicVol : 0; this.musicBus.connect(this.master);
 
     // белый шум
@@ -24,16 +28,17 @@ export class GameAudio {
 
     // --- мотор ---
     this.engGain = ctx.createGain(); this.engGain.gain.value = 0;
-    this.engFilter = ctx.createBiquadFilter(); this.engFilter.type = 'lowpass'; this.engFilter.frequency.value = 800; this.engFilter.Q.value = 3;
+    this.engFilter = ctx.createBiquadFilter(); this.engFilter.type = 'lowpass'; this.engFilter.frequency.value = 800; this.engFilter.Q.value = 1.4;
     const shaper = ctx.createWaveShaper();
     const curve = new Float32Array(1024);
-    for (let i = 0; i < 1024; i++) { const x = i / 512 - 1; curve[i] = Math.tanh(x * 3.2); }
+    for (let i = 0; i < 1024; i++) { const x = i / 512 - 1; curve[i] = Math.tanh(x * 1.6); }
     shaper.curve = curve;
+    // основной тон + суб-октава + немного верхних гармоник: звучит как мотор, а не как «пищалка»
     this.oscs = [
-      { o: ctx.createOscillator(), type: 'sawtooth', mul: 1, g: 0.5 },
-      { o: ctx.createOscillator(), type: 'square', mul: 0.5, g: 0.35 },
-      { o: ctx.createOscillator(), type: 'sawtooth', mul: 2, g: 0.18 },
-      { o: ctx.createOscillator(), type: 'triangle', mul: 0.25, g: 0.4 },
+      { o: ctx.createOscillator(), type: 'sawtooth', mul: 1, g: 0.38 },
+      { o: ctx.createOscillator(), type: 'sine', mul: 0.5, g: 0.6 },
+      { o: ctx.createOscillator(), type: 'triangle', mul: 2, g: 0.16 },
+      { o: ctx.createOscillator(), type: 'sawtooth', mul: 1.005, g: 0.25 },
     ];
     const mix = ctx.createGain(); mix.gain.value = 0.5;
     for (const s of this.oscs) {
@@ -41,7 +46,7 @@ export class GameAudio {
     }
     // «рокот»: амплитудная модуляция низкой частотой
     this.rumble = ctx.createOscillator(); this.rumble.frequency.value = 18;
-    const rg = ctx.createGain(); rg.gain.value = 0.25; this.rumble.connect(rg); rg.connect(mix.gain); this.rumble.start();
+    const rg = ctx.createGain(); rg.gain.value = 0.15; this.rumble.connect(rg); rg.connect(mix.gain); this.rumble.start();
     mix.connect(shaper); shaper.connect(this.engFilter); this.engFilter.connect(this.engGain); this.engGain.connect(this.sfx);
 
     // --- визг шин ---
@@ -71,6 +76,8 @@ export class GameAudio {
   }
 
   setVolume(v) { this.volume = v; if (this.master) this.master.gain.value = v; }
+  setSfxVol(v) { this.sfxVol = v; if (this.sfx) this.sfx.gain.value = v; }
+  setMusicVol(v) { this.musicVol = v; if (this.musicBus && this.musicOn) this.musicBus.gain.value = v; }
   setMusic(on) { this.musicOn = on; if (this.musicBus) this.musicBus.gain.setTargetAtTime(on ? this.musicVol : 0, this.ctx.currentTime, 0.2); }
 
   // вызывается каждый кадр во время заезда
@@ -89,13 +96,13 @@ export class GameAudio {
     for (const s of this.oscs) s.o.frequency.setTargetAtTime(f * s.mul, t, 0.02);
     this.rumble.frequency.setTargetAtTime(8 + rpm / 400, t, 0.05);
     const load = 0.35 + 0.65 * throttle;
-    this.engFilter.frequency.setTargetAtTime(300 + rpm * 0.35 * load + throttle * 900, t, 0.03);
-    this.engGain.gain.setTargetAtTime(0.12 + 0.16 * load, t, 0.04);
+    this.engFilter.frequency.setTargetAtTime(220 + rpm * 0.22 * load + throttle * 500, t, 0.04);
+    this.engGain.gain.setTargetAtTime(0.1 + 0.08 * load, t, 0.05);
     const sl = Math.min(1, slip) * (offroad ? 0.3 : 1) * Math.min(1, speed / 6);
-    this.tireGain.gain.setTargetAtTime(sl * 0.32, t, 0.05);
+    this.tireGain.gain.setTargetAtTime(sl * 0.13, t, 0.08);
     this.tireBp.frequency.setTargetAtTime(900 + sl * 500, t, 0.1);
-    this.gravelGain.gain.setTargetAtTime(offroad ? Math.min(0.4, speed / 50) : 0, t, 0.05);
-    this.windGain.gain.setTargetAtTime(Math.min(0.35, (speed / 70) ** 2 * 0.35), t, 0.1);
+    this.gravelGain.gain.setTargetAtTime(offroad ? Math.min(0.18, speed / 90) : 0, t, 0.08);
+    this.windGain.gain.setTargetAtTime(Math.min(0.12, (speed / 70) ** 2 * 0.12), t, 0.15);
   }
 
   burst(dur, freq, vol, type = 'lowpass') {
@@ -114,14 +121,14 @@ export class GameAudio {
     o.connect(g); g.connect(bus || this.sfx); o.start(t); o.stop(t + dur + 0.05);
   }
 
-  crash(strength) { this.burst(0.35, 600 + strength * 40, Math.min(0.9, 0.2 + strength * 0.05)); this.tone(70, 0.25, Math.min(0.5, strength * 0.03), 'sine'); }
-  shift() { this.burst(0.08, 2500, 0.12, 'bandpass'); }
-  backfire() { this.burst(0.12, 300, 0.5); }
-  click() { this.tone(880, 0.06, 0.12, 'square'); }
-  checkpoint() { [660, 880, 1320].forEach((f, i) => this.tone(f, 0.18, 0.18, 'triangle', i * 0.09)); }
-  countdown(go) { this.tone(go ? 1046 : 523, go ? 0.5 : 0.22, 0.25, 'square'); }
-  score() { this.tone(1320, 0.12, 0.12, 'triangle'); this.tone(1760, 0.14, 0.1, 'triangle', 0.06); }
-  gameOver() { [523, 440, 349, 262].forEach((f, i) => this.tone(f, 0.3, 0.2, 'sawtooth', i * 0.18)); }
+  crash(strength) { this.burst(0.3, 500 + strength * 25, Math.min(0.32, 0.1 + strength * 0.015)); this.tone(70, 0.22, Math.min(0.22, strength * 0.012), 'sine'); }
+  shift() { this.burst(0.06, 2200, 0.05, 'bandpass'); }
+  backfire() { this.burst(0.1, 280, 0.18); }
+  click() { this.tone(880, 0.05, 0.05, 'triangle'); }
+  checkpoint() { [660, 880, 1320].forEach((f, i) => this.tone(f, 0.18, 0.09, 'triangle', i * 0.09)); }
+  countdown(go) { this.tone(go ? 1046 : 523, go ? 0.5 : 0.22, 0.1, 'triangle'); }
+  score() { this.tone(1320, 0.12, 0.06, 'triangle'); this.tone(1760, 0.14, 0.05, 'triangle', 0.06); }
+  gameOver() { [523, 440, 349, 262].forEach((f, i) => this.tone(f, 0.3, 0.08, 'triangle', i * 0.18)); }
 
   // ---------- музыка: простой синт-вейв луп, генерируется на лету ----------
   startMusic() {
@@ -138,8 +145,8 @@ export class GameAudio {
         const bar = Math.floor(n / 16) % 4, s = n % 16;
         const ch = chords[bar];
         if (this.musicOn) {
-          if (bass[s] !== 0 || s % 4 === 0) this.tone(midi(ch[0] - 24 + (bass[s] || 0)), step * 1.8, 0.22, 'sawtooth', next - ctx.currentTime, this.musicBus);
-          if (s % 2 === 0) this.tone(midi(ch[arp[(s / 2) % 8]] + 12), step * 1.5, 0.07, 'square', next - ctx.currentTime, this.musicBus);
+          if (bass[s] !== 0 || s % 4 === 0) this.tone(midi(ch[0] - 24 + (bass[s] || 0)), step * 1.8, 0.14, 'triangle', next - ctx.currentTime, this.musicBus);
+          if (s % 2 === 0) this.tone(midi(ch[arp[(s / 2) % 8]] + 12), step * 1.5, 0.05, 'triangle', next - ctx.currentTime, this.musicBus);
           if (s % 4 === 0) this.kick(next);
           if (s % 8 === 4) this.snare(next);
           if (s % 2 === 1) this.hat(next);
@@ -153,19 +160,19 @@ export class GameAudio {
   kick(when) {
     const ctx = this.ctx; const o = ctx.createOscillator(); const g = ctx.createGain();
     o.frequency.setValueAtTime(140, when); o.frequency.exponentialRampToValueAtTime(40, when + 0.15);
-    g.gain.setValueAtTime(0.5, when); g.gain.exponentialRampToValueAtTime(0.001, when + 0.2);
+    g.gain.setValueAtTime(0.35, when); g.gain.exponentialRampToValueAtTime(0.001, when + 0.2);
     o.connect(g); g.connect(this.musicBus); o.start(when); o.stop(when + 0.25);
   }
   snare(when) {
     const ctx = this.ctx; const s = ctx.createBufferSource(); s.buffer = this.noiseBuf;
     const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 1500;
-    const g = ctx.createGain(); g.gain.setValueAtTime(0.25, when); g.gain.exponentialRampToValueAtTime(0.001, when + 0.15);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.14, when); g.gain.exponentialRampToValueAtTime(0.001, when + 0.15);
     s.connect(f); f.connect(g); g.connect(this.musicBus); s.start(when, Math.random()); s.stop(when + 0.2);
   }
   hat(when) {
     const ctx = this.ctx; const s = ctx.createBufferSource(); s.buffer = this.noiseBuf;
     const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 7000;
-    const g = ctx.createGain(); g.gain.setValueAtTime(0.06, when); g.gain.exponentialRampToValueAtTime(0.001, when + 0.04);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.035, when); g.gain.exponentialRampToValueAtTime(0.001, when + 0.04);
     s.connect(f); f.connect(g); g.connect(this.musicBus); s.start(when, Math.random()); s.stop(when + 0.06);
   }
 }
