@@ -233,10 +233,16 @@ export function makeHorizon(map) {
     c.lineTo(W, H); c.closePath(); c.fill();
   };
   const mix = (hex, k) => '#' + new THREE.Color(hex).lerp(fog, k).getHexString();
-  if (map.id === 'desert') {
+  const hz = map.horizon ?? map.id;
+  if (hz === 'hills') {
+    layer(mix(0x7a8f8a, 0.55), 80, 14, 3, 0.04);
+    layer(mix(0x5f7a62, 0.4), 45, 4, 6, 0.05);
+  } else if (hz === 'sea') {
+    layer(mix(0x6b8f7a, 0.6), 34, 0, 2, 0.02);
+  } else if (hz === 'desert') {
     layer(mix(0x9a5a4a, 0.55), 110, 20, 3, 0.05);
     layer(mix(0xb0583a, 0.35), 70, 8, 5, 0.08);
-  } else if (map.id === 'snow') {
+  } else if (hz === 'snow') {
     layer(mix(0x8fa3bd, 0.5), 190, 20, 4, 0.12);
     // снежные шапки
     c.globalCompositeOperation = 'source-atop';
@@ -258,7 +264,7 @@ export function makeHorizon(map) {
     }
   }
   const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.wrapS = THREE.RepeatWrapping;
-  const R = 820, HH = map.id === 'snow' ? 230 : map.id === 'city' ? 190 : 140;
+  const R = 820, HH = hz === 'snow' ? 230 : hz === 'city' ? 190 : 140;
   const geo = new THREE.CylinderGeometry(R, R, HH, 96, 1, true);
   const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.BackSide, fog: false, depthWrite: false }));
   mesh.userData.h = HH;

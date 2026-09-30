@@ -133,3 +133,6 @@ body.touch .gauge { right: 50%; transform: translateX(50%) scale(.7); transform-
 }
 
 #fps { position: fixed; right: 8px; bottom: 4px; z-index: 20; font: 700 12px monospace; color: #7cff4f; text-shadow: 0 1px 2px #000; pointer-events: none; }
+#map-cards { display: grid; grid-template-columns: repeat(3, 1fr); }
+#map-cards .card { padding: 10px 14px; }
+@media (max-width: 700px) { #map-cards { grid-template-columns: repeat(2, 1fr); } }

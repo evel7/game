@@ -4,6 +4,7 @@ import { Vehicle } from './vehicle.js';
 import { CARS, carStats } from './cars.js';
 import { MAPS } from './maps.js';
 import { Track, SP, CP_EVERY } from './track.js';
+import { Field } from './field.js';
 import { buildCarModel, animateCar } from './carmodel.js';
 import { Rival } from './ai.js';
 import { GameAudio } from './audio.js';
@@ -24,6 +25,8 @@ const MODES = [
   { id: 'free', name: 'Свободная езда', desc: 'Без таймера и давления. Катайся по бесконечной трассе и тренируй дрифт.', timer: 0, rivals: 3,
     bonus: () => 0 },
 ];
+// на картах-«Полигонах» трассы нет: свободная езда, очки за дрифт, без таймера и соперников
+const FIELD_MODE = { id: 'field', name: 'Полигон', desc: '', timer: 0, rivals: 0, bonus: () => 0 };
 const STEP = 1 / 240; // физика 240 шагов/с — плавно даже на мониторах 144–240 Гц
 const CP_FIRST_IDX = 400;
 
@@ -35,6 +38,8 @@ const store = {
 const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 if (isTouch) document.body.classList.add('touch');
 const settings = Object.assign({ vol: 0.8, music: true, assist: true, manual: false, quality: isTouch ? 0 : 1, camera: 0, units: 'kmh', fps: 0, showFps: false, sfxVol: 0.8, musicVol: 0.3, easy: true, smoke: true, outline: true }, store.get('settings', {}));
+if (!settings.handling) settings.handling = settings.easy === false ? 'real' : 'easy';
+settings.easy = settings.handling === 'easy';
 const sel = Object.assign({ car: 0, colors: {}, mode: 0, map: 0 }, store.get('sel', {}));
 let records = store.get('records', {});
 const saveSettings = () => store.set('settings', settings);
@@ -142,14 +147,15 @@ function buildWorld(mapIdx, seed) {
   const sky = makeSky(map); group.add(sky);
   const horizon = makeHorizon(map); horizon.position.y = horizon.userData.h / 2 - 45; sky.add(horizon);
   sky.add(makeClouds(map));
-  const track = new Track(group, map, seed, +settings.quality);
+  const track = map.field ? new Field(group, map, seed, +settings.quality) : new Track(group, map, seed, +settings.quality);
   const farPlane = new THREE.Mesh(new THREE.PlaneGeometry(5000, 5000), new THREE.MeshLambertMaterial({ color: map.ground.far }));
   farPlane.rotation.x = -Math.PI / 2; group.add(farPlane);
 
-  const smokeColor = { desert: 0xe6ddd0, snow: 0xffffff, city: 0xb8b8c8 }[map.id];
+  const smokeColor = map.smoke ?? { desert: 0xe6ddd0, snow: 0xffffff, city: 0xb8b8c8 }[map.id];
   const smoke = new Smoke(group, smokeColor, settings.quality > 0 ? 90 : 50);
-  const dust = new Smoke(group, { desert: 0xcf9f6c, snow: 0xf4f8ff, city: 0x77777f }[map.id], 40);
-  const skids = new Skids(group, settings.quality > 0 ? 3000 : 1200, map.id === 'snow' ? 0x7d8898 : 0x0c0c0c, map.id === 'snow' ? 0.4 : 0.6);
+  const dust = new Smoke(group, map.dust ?? { desert: 0xcf9f6c, snow: 0xf4f8ff, city: 0x77777f }[map.id], 40);
+  const skidCol = map.skid ?? (map.id === 'snow' ? 0x7d8898 : 0x0c0c0c);
+  const skids = new Skids(group, settings.quality > 0 ? 3000 : 1200, skidCol, skidCol === 0x0c0c0c ? 0.6 : 0.4);
   const snow = map.weather === 'snow' ? new Snowfall(group, settings.quality > 0 ? 2600 : 900) : null;
 
   W = { map, mapIdx, group, hemi, sun, sunDir: sd, sky, track, farPlane, smoke, dust, skids, snow, rivals: [], player: null };
@@ -168,7 +174,8 @@ function spawnPlayer(idx, lat) {
   const veh = new Vehicle(spec);
   const p = W.track.P(idx);
   veh.reset(p.x + p.lx * lat, p.z + p.lz * lat, p.h);
-  veh.idx = idx; veh.lat = lat; veh.roadY = p.y; veh.slope = 0;
+  veh.idx = idx; veh.lat = lat; veh.roadY = p.y; veh.slope = 0; veh.roll = 0;
+  if (W.track.isField) { W.track.target = veh; veh.odo = 0; }
   if (W.map.night) {
     const hl = new THREE.SpotLight(0xfff1d6, 40, 100, 0.5, 0.6, 1.4);
     hl.position.set(0, 0.8, 2.0); hl.target.position.set(0, 0, 25);
@@ -190,7 +197,7 @@ function placePlayerModel(dt) {
   const { veh, model } = W.player;
   const ip = interp();
   model.root.position.set(ip.x, ip.y + 0.03, ip.z);
-  model.root.rotation.set(-Math.atan(veh.slope || 0), ip.h, 0, 'YXZ');
+  model.root.rotation.set(-Math.atan(veh.slope || 0), ip.h, Math.atan(veh.roll || 0), 'YXZ');
   animateCar(model, veh, dt || 0.016, G && G.braking);
 }
 
@@ -249,6 +256,7 @@ function updateCamera(dt, instant = false) {
     if (instant || cam.y === undefined) cam.y = cy + hgt;
     cam.y += (cy + hgt - cam.y) * Math.min(1, dt * 6);
     des.set(veh.x - Math.sin(cam.h) * dist, Math.max(cam.y, cy + 1.0), veh.z - Math.cos(cam.h) * dist);
+    if (W.track.isField) des.y = Math.max(des.y, W.track.heightAt(des.x, des.z) + 0.9);
     look.set(veh.x + Math.sin(cam.h) * 2.5, cy + 1.05, veh.z + Math.cos(cam.h) * 2.5);
     cam.pos.copy(des);
     cam.look.copy(look);
@@ -290,8 +298,9 @@ function menuCamera(dt, garage) {
 }
 
 // ======================= заезд =======================
+function curMode() { return MAPS[sel.map].field ? FIELD_MODE : MODES[sel.mode]; }
 function newGame() {
-  const mode = MODES[sel.mode];
+  const mode = curMode();
   G = {
     mode, time: mode.timer, score: 0, dist: 0, startS: W.track.P(6).s, driftTotal: 0, overtakes: 0, cpCount: 0,
     nextCp: CP_FIRST_IDX, maxSpeed: 0, bestDrift: 0, hits: 0, cd: 3.6, cdShown: 4, started: false, over: false, braking: false,
@@ -346,9 +355,13 @@ function physicsStep(inp) {
   const { veh } = W.player;
   veh.px = veh.x; veh.pz = veh.z; veh.ph = veh.h; veh.pY = veh.roadY;
   const track = W.track;
-  const res = veh.step(STEP, inp, { grip: W.map.grip * (settings.easy ? 1.12 : 1), assist: settings.assist ? (settings.easy ? 1.15 : 1) : 0, manual: settings.manual, easy: settings.easy });
+  const easy = settings.handling === 'easy';
+  const res = veh.step(STEP, inp, easy
+    ? { grip: W.map.grip * 1.12, assist: settings.assist ? 1.15 : 0, manual: settings.manual, easy: true }
+    : { grip: W.map.grip, assist: settings.assist ? 0.45 : 0, manual: settings.manual, easy: false, real: true });
   if (res.shifted) { audio.shift(); if (res.shifted > 0 && inp.throttle > 0.5 && Math.random() < 0.35) audio.backfire(); }
   inp.shiftUp = inp.shiftDown = false;
+  if (track.isField) { fieldStep(veh, track); return; }
   const pr = track.project(veh.x, veh.z, veh.idx);
   veh.idx = pr.idx; veh.lat = pr.lat; veh.roadY = pr.y; veh.slope = pr.slope;
   veh.offroad = Math.abs(pr.lat) > track.hw + 0.3 && Math.abs(pr.k) < 1 / 170;
@@ -357,10 +370,52 @@ function physicsStep(inp) {
   const rel = veh.h - pr.h;
   const ext = Math.abs(Math.cos(rel)) * b.W / 2 + Math.abs(Math.sin(rel)) * b.L / 2;
   const limit = track.wall - 0.1 - ext;
+  const s = Math.sign(pr.lat);
+  // лёгкий режим: «мягкий отбойник» — у края дороги машину плавно отводит к центру
+  // и доворачивает вдоль трассы, поэтому в ограждение почти не прилетаешь
+  if (easy && veh.speed > 3) {
+    const zone = limit - 2.2;
+    const over = Math.abs(pr.lat) - zone;
+    if (over > 0) {
+      const k = clamp(over / 2.2, 0, 1);
+      const vLat = veh.vx * pr.lx + veh.vz * pr.lz;            // скорость поперёк трассы (+ влево)
+      if (vLat * s > 0) { const dv = vLat * Math.min(1, k * k * 9 * STEP); veh.vx -= pr.lx * dv; veh.vz -= pr.lz * dv; }
+      const dh = angDiff(pr.h, veh.h);
+      const fwd = Math.cos(dh) > 0 ? dh : angDiff(pr.h + Math.PI, veh.h);
+      if (Math.abs(veh.beta) < 0.7) veh.r += fwd * k * 5 * STEP * Math.min(1, veh.speed / 15);
+    }
+  }
   if (Math.abs(pr.lat) > limit) {
-    const s = Math.sign(pr.lat);
-    const imp = veh.collideWall(-s * pr.lx, -s * pr.lz, Math.abs(pr.lat) - limit, 0.3);
-    if (imp > 1.5 && G) onHit(imp);
+    // удар мягкий: почти без отскока, скорость вдоль отбойника сохраняется
+    const imp = veh.collideWall(-s * pr.lx, -s * pr.lz, Math.abs(pr.lat) - limit, easy ? 0.08 : 0.25);
+    if (easy) { const dh = angDiff(pr.h, veh.h); const fwd = Math.cos(dh) > 0 ? dh : angDiff(pr.h + Math.PI, veh.h); veh.h += fwd * 0.08; veh.r *= 0.6; }
+    if (imp > (easy ? 3.5 : 1.5) && G) onHit(imp);
+  }
+}
+
+// физика на «Полигоне»: высота и наклон рельефа, гравитация на склонах, препятствия, берег
+function fieldStep(veh, f) {
+  veh.idx = 6; veh.lat = 0; veh.offroad = false;
+  const sh = Math.sin(veh.h), ch = Math.cos(veh.h);
+  veh.roadY = f.heightAt(veh.x, veh.z);
+  const [gx, gz] = f.grad(veh.x, veh.z);
+  veh.slope = gx * sh + gz * ch;          // уклон вперёд
+  veh.roll = (gx * ch - gz * sh) * 0.8;  // крен
+  // машина скатывается со склонов
+  veh.vx -= 9.81 * gx * 0.85 * STEP; veh.vz -= 9.81 * gz * 0.85 * STEP;
+  if (G) veh.odo = (veh.odo || 0) + veh.speed * STEP;
+  const b = veh.spec.body;
+  for (const o of f.collidersNear(veh.x, veh.z)) {
+    const dx = veh.x - o.x, dz = veh.z - o.z, d = Math.hypot(dx, dz), R = o.r + b.W * 0.55;
+    if (d < R && d > 1e-4) {
+      const imp = veh.collideWall(dx / d, dz / d, R - d, 0.15);
+      if (imp > 3 && G) onHit(imp);
+    }
+  }
+  // пляж: у воды — мягкая граница
+  if (f.f.shore !== undefined && veh.x < f.f.shore - 18) {
+    const imp = veh.collideWall(1, 0, f.f.shore - 18 - veh.x, 0.1);
+    if (imp > 4 && G) onHit(imp);
   }
 }
 
@@ -479,7 +534,7 @@ function updateScoring(dt, veh) {
   G.elapsed += dt;
   const spd = veh.speed, kmh = spd * 3.6;
   G.maxSpeed = Math.max(G.maxSpeed, kmh);
-  G.dist = Math.max(G.dist, W.track.P(veh.idx).s - G.startS);
+  G.dist = W.track.isField ? veh.odo || 0 : Math.max(G.dist, W.track.P(veh.idx).s - G.startS);
 
   // --- дрифт ---
   const ang = Math.abs(veh.beta) * 57.3;
@@ -520,7 +575,7 @@ function updateScoring(dt, veh) {
 
   // --- счёт и время ---
   if (G.mode.id === 'race') G.score = Math.floor(G.dist) + G.overtakes * 300 + Math.floor(G.driftTotal / 4);
-  else if (G.mode.id === 'drift') G.score = G.driftTotal;
+  else if (G.mode.id === 'drift' || G.mode.id === 'field') G.score = G.driftTotal;
   else G.score = Math.floor(G.dist);
   if (G.mode.timer) {
     G.time -= dt;
@@ -571,9 +626,10 @@ function updateFx(dt, inp) {
       if (Math.random() < (q > 0 ? 2 : 1) * dt * Math.min(1, (Math.abs(veh.beta) - 0.3) * 3)) W.smoke.emit(x, veh.roadY, z, veh.vx, veh.vz, slip, W.map.night ? 0.1 : 0.15);
     }
     if (settings.smoke && veh.offroad && spd > 4 && Math.random() < 5 * dt) W.dust.emit(x, veh.roadY, z, veh.vx, veh.vz, 1, 0.55);
-    W.skids.add(side > 0 ? 0 : 1, x, veh.roadY, z, lx, lz, !veh.offroad && slip > 0.42 ? Math.min(1, (slip - 0.3) * 1.6) : 0);
+    const fld = W.track.isField;
+    W.skids.add(side > 0 ? 0 : 1, x, fld ? W.track.heightAt(x, z) : veh.roadY, z, lx, lz, !veh.offroad && slip > 0.42 ? Math.min(1, (slip - 0.3) * 1.6) : 0);
     const [fx, fz] = wheelPos(b.wheelF, side * b.track / 2);
-    W.skids.add(side > 0 ? 2 : 3, fx, veh.roadY, fz, lx, lz, !veh.offroad && (veh.frontSlide > 0.85 || (inp.brake > 0.5 && spd > 15 && veh.u > 0 && veh.lockR > 0)) ? 0.6 : 0);
+    W.skids.add(side > 0 ? 2 : 3, fx, fld ? W.track.heightAt(fx, fz) : veh.roadY, fz, lx, lz, !veh.offroad && (veh.frontSlide > 0.85 || (inp.brake > 0.5 && spd > 15 && veh.u > 0 && veh.lockR > 0)) ? 0.6 : 0);
   }
   // соперники тоже дымят в поворотах
   for (const r of W.rivals) {
@@ -632,6 +688,24 @@ function drawMinimap(veh) {
     return [cx - l * scale, cy - f * scale];
   };
   const tr = W.track;
+  if (tr.isField) {
+    // сетка поля и препятствия рядом
+    c.strokeStyle = 'rgba(255,255,255,0.18)'; c.lineWidth = 1;
+    const g0x = Math.floor((veh.x - 450) / 32) * 32, g0z = Math.floor((veh.z - 450) / 32) * 32;
+    for (let k = 0; k < 30; k++) {
+      let [x1, y1] = toMap(g0x + k * 32, veh.z - 450), [x2, y2] = toMap(g0x + k * 32, veh.z + 450);
+      c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke();
+      [x1, y1] = toMap(veh.x - 450, g0z + k * 32); [x2, y2] = toMap(veh.x + 450, g0z + k * 32);
+      c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke();
+    }
+    c.fillStyle = 'rgba(255,255,255,0.8)';
+    for (const o of tr.collidersNear(veh.x, veh.z)) { const [x, y] = toMap(o.x, o.z); c.beginPath(); c.arc(x, y, 2.5, 0, Math.PI * 2); c.fill(); }
+    if (tr.f.shore !== undefined) { const [x1, y1] = toMap(tr.f.shore - 18, veh.z - 600), [x2, y2] = toMap(tr.f.shore - 18, veh.z + 600); c.strokeStyle = '#4bb8ff'; c.lineWidth = 4; c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke(); }
+    c.restore();
+    c.fillStyle = '#4bd2ff';
+    c.beginPath(); c.moveTo(cx, cy - 8); c.lineTo(cx - 6, cy + 6); c.lineTo(cx + 6, cy + 6); c.closePath(); c.fill();
+    return;
+  }
   c.lineCap = 'round'; c.lineJoin = 'round';
   c.beginPath();
   for (let i = Math.max(tr.base, Math.floor(veh.idx) - 60); i < Math.min(tr.lastIdx, veh.idx + 320); i += 3) {
@@ -663,7 +737,7 @@ function updateHUD(dt) {
     $('hud-timer').classList.toggle('warn', G.time < 10);
   } else setText('hud-timer', fmtTime(G.elapsed));
   const toCp = Math.max(0, (G.nextCp - veh.idx) * SP);
-  setText('hud-next', `до чекпоинта ${Math.round(toCp)} м`);
+  setText('hud-next', W.track.isField ? 'свободная езда · дрифт' : `до чекпоинта ${Math.round(toCp)} м`);
   setText('hud-score', G.score.toLocaleString('ru-RU'));
   setText('hud-dist', `${(G.dist / 1000).toFixed(2)} км${G.mode.id === 'race' ? ` · обгонов: ${G.overtakes}` : ''}`);
   const rec = records[`${G.mode.id}_${W.map.id}`];
@@ -708,9 +782,10 @@ function enterMenuWorld() {
 document.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => { audio.init(); audio.click(); showScreen(b.dataset.go); }));
 
 function renderSetup() {
-  $('mode-cards').innerHTML = MODES.map((m, i) => `<div class="card ${i === sel.mode ? 'sel' : ''}" data-mode="${i}"><b>${m.name}</b><small>${m.desc}</small></div>`).join('');
+  const fieldSel = !!MAPS[sel.map].field;
+  $('mode-cards').innerHTML = (fieldSel ? `<div class="card sel"><b>Полигон</b><small>На полигоне нет трассы: свободная езда без таймера, очки за дрифт.</small></div>` : '') + MODES.map((m, i) => `<div class="card ${i === sel.mode && !fieldSel ? 'sel' : ''}" ${fieldSel ? 'style="opacity:.4"' : ''} data-mode="${i}"><b>${m.name}</b><small>${m.desc}</small></div>`).join('');
   $('map-cards').innerHTML = MAPS.map((m, i) => {
-    const rec = records[`${MODES[sel.mode].id}_${m.id}`];
+    const rec = records[`${m.field ? 'field' : MODES[sel.mode].id}_${m.id}`];
     return `<div class="card ${i === sel.map ? 'sel' : ''}" data-map="${i}"><span class="tag">${m.tag}</span><b>${m.name}</b><small>${m.desc}</small>${rec ? `<span class="rec">рекорд: ${rec.score.toLocaleString('ru-RU')}</span>` : ''}</div>`;
   }).join('');
   $('setup-car-name').textContent = CARS[sel.car].name;
@@ -750,7 +825,7 @@ $('car-next').addEventListener('click', () => switchCar(1));
 function renderRecords() {
   let html = '<table><tr><th>Режим</th><th>Карта</th><th>Очки</th><th>Км</th><th>Машина</th></tr>';
   let any = false;
-  for (const m of MODES) for (const mp of MAPS) {
+  for (const m of [...MODES, FIELD_MODE]) for (const mp of MAPS) {
     const r = records[`${m.id}_${mp.id}`];
     if (!r) continue; any = true;
     html += `<tr><td>${m.name}</td><td>${mp.name}</td><td><b>${r.score.toLocaleString('ru-RU')}</b></td><td>${(r.dist / 1000).toFixed(2)}</td><td>${r.car}</td></tr>`;
@@ -765,14 +840,14 @@ function renderSettings() {
   $('set-manual').checked = settings.manual; $('set-quality').value = settings.quality; $('set-camera').value = settings.camera; $('set-units').value = settings.units;
   $('set-sfx').value = settings.sfxVol; $('set-musicvol').value = settings.musicVol;
   $('set-outline').checked = settings.outline;
-  $('set-easy').checked = settings.easy; $('set-smoke').checked = settings.smoke;
+  $('set-handling').value = settings.handling; $('set-smoke').checked = settings.smoke;
   $('set-fps').value = settings.fps; $('set-showfps').checked = settings.showFps;
 }
 $('set-vol').addEventListener('input', (e) => { settings.vol = +e.target.value; audio.setVolume(settings.vol); saveSettings(); });
 $('set-sfx').addEventListener('input', (e) => { settings.sfxVol = +e.target.value; audio.setSfxVol(settings.sfxVol); saveSettings(); });
 $('set-musicvol').addEventListener('input', (e) => { settings.musicVol = +e.target.value; audio.setMusicVol(settings.musicVol); saveSettings(); });
 $('set-outline').addEventListener('change', (e) => { settings.outline = e.target.checked; saveSettings(); if (state === 'menu') spawnPlayer(6, -2.8); });
-$('set-easy').addEventListener('change', (e) => { settings.easy = e.target.checked; saveSettings(); });
+$('set-handling').addEventListener('change', (e) => { settings.handling = e.target.value; settings.easy = settings.handling === 'easy'; saveSettings(); });
 $('set-smoke').addEventListener('change', (e) => { settings.smoke = e.target.checked; saveSettings(); if (W) W.smoke.clear(); });
 $('set-music').addEventListener('change', (e) => { settings.music = e.target.checked; audio.setMusic(settings.music); saveSettings(); });
 $('set-assist').addEventListener('change', (e) => { settings.assist = e.target.checked; saveSettings(); });
@@ -803,7 +878,8 @@ function handleEvents(evs) {
         clearTimeout(handleEvents._t); handleEvents._t = setTimeout(() => h.classList.remove('show'), 1200);
       }
       if (e === 'reset' && state === 'race') {
-        const { veh } = W.player; const p = W.track.sample(Math.max(W.track.base + 2, veh.idx));
+        const { veh } = W.player;
+        const p = W.track.isField ? { x: veh.x, z: veh.z, h: veh.h, y: W.track.heightAt(veh.x, veh.z) } : W.track.sample(Math.max(W.track.base + 2, veh.idx));
         veh.reset(p.x, p.z, p.h); veh.idx = Math.round(veh.idx); veh.roadY = p.y; veh.px = undefined; veh.ph = undefined; veh.pY = undefined; veh.pz = undefined;
         W.skids.last = [null, null, null, null];
         showMsg('НА ТРАССУ', 0.8);
