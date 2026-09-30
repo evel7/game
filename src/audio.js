@@ -51,8 +51,8 @@ export class GameAudio {
 
     // --- визг шин ---
     this.tireSrc = this.loopNoise();
-    const bp1 = ctx.createBiquadFilter(); bp1.type = 'bandpass'; bp1.frequency.value = 1100; bp1.Q.value = 6;
-    const bp2 = ctx.createBiquadFilter(); bp2.type = 'bandpass'; bp2.frequency.value = 1800; bp2.Q.value = 9;
+    const bp1 = ctx.createBiquadFilter(); bp1.type = 'bandpass'; bp1.frequency.value = 750; bp1.Q.value = 3;
+    const bp2 = ctx.createBiquadFilter(); bp2.type = 'lowpass'; bp2.frequency.value = 500; bp2.Q.value = 0.7;
     this.tireGain = ctx.createGain(); this.tireGain.gain.value = 0;
     this.tireSrc.connect(bp1); this.tireSrc.connect(bp2); bp1.connect(this.tireGain); bp2.connect(this.tireGain); this.tireGain.connect(this.sfx);
     this.tireBp = bp1;
@@ -99,8 +99,8 @@ export class GameAudio {
     this.engFilter.frequency.setTargetAtTime(220 + rpm * 0.22 * load + throttle * 500, t, 0.04);
     this.engGain.gain.setTargetAtTime(0.1 + 0.08 * load, t, 0.05);
     const sl = Math.min(1, slip) * (offroad ? 0.3 : 1) * Math.min(1, speed / 6);
-    this.tireGain.gain.setTargetAtTime(sl * 0.13, t, 0.08);
-    this.tireBp.frequency.setTargetAtTime(900 + sl * 500, t, 0.1);
+    this.tireGain.gain.setTargetAtTime(sl * 0.08, t, 0.12);
+    this.tireBp.frequency.setTargetAtTime(650 + sl * 250, t, 0.15);
     this.gravelGain.gain.setTargetAtTime(offroad ? Math.min(0.18, speed / 90) : 0, t, 0.08);
     this.windGain.gain.setTargetAtTime(Math.min(0.12, (speed / 70) ** 2 * 0.12), t, 0.15);
   }

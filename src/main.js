@@ -228,15 +228,18 @@ function updateCamera(dt, instant = false) {
   if (instant) cam.h = target;
   cam.h += angDiff(target, cam.h) * Math.min(1, dt * 3.5);
   const k = instant ? 1 : 1 - Math.exp(-dt * 7);
-  let fov = 60 + Math.min(20, spd * 0.24);
+  let fov = 60 + Math.min(9, spd * 0.12);
   const des = new THREE.Vector3(), look = new THREE.Vector3();
   if (cam.mode === 0 || cam.mode === 1) {
     const dist = cam.mode === 0 ? 6.3 : 9.8, hgt = cam.mode === 0 ? 2.2 : 3.6;
-    des.set(veh.x - Math.sin(cam.h) * dist, cy + hgt, veh.z - Math.cos(cam.h) * dist);
+    // камера жёстко привязана к машине на постоянном расстоянии (на скорости не «отстаёт»);
+    // сглаживается только поворот камеры и высота — поэтому картинка плавная, но машина всегда рядом
+    if (instant || cam.y === undefined) cam.y = cy + hgt;
+    cam.y += (cy + hgt - cam.y) * Math.min(1, dt * 6);
+    des.set(veh.x - Math.sin(cam.h) * dist, Math.max(cam.y, cy + 1.0), veh.z - Math.cos(cam.h) * dist);
     look.set(veh.x + Math.sin(cam.h) * 2.5, cy + 1.05, veh.z + Math.cos(cam.h) * 2.5);
-    cam.pos.lerp(des, k);
-    cam.pos.y = Math.max(cam.pos.y, cy + 1.0);
-    cam.look.lerp(look, instant ? 1 : 1 - Math.exp(-dt * 12));
+    cam.pos.copy(des);
+    cam.look.copy(look);
   } else if (cam.mode === 2) {
     const b = veh.spec.body;
     des.set(veh.x + fwdX * (b.cabin[0][0] + 0.25), cy + b.cabin[0][1] + 0.55, veh.z + fwdZ * (b.cabin[0][0] + 0.25));
@@ -441,7 +444,8 @@ function updateRace(dt) {
 
   if (state === 'race') updateScoring(dt, veh);
   audio.update(veh, veh.spec, state === 'countdown' ? Math.max(0, (veh.rpm - veh.spec.idle) / veh.spec.redline) : inp.throttle,
-    Math.max(veh.rearSlide * (Math.abs(veh.beta) > 0.12 || veh.spinR > 0.2 || veh.lockR > 0 ? 1 : 0.3), veh.frontSlide > 0.8 ? 0.5 : 0),
+    // визг шин только в настоящем скольжении (занос/блокировка), а не от обычного поворота с газом
+    Math.max(clamp((Math.abs(veh.beta) - 0.15) * 2.2, 0, 1), veh.lockR > 0.5 && veh.speed > 8 ? 0.6 : 0),
     veh.offroad, veh.speed, state !== 'paused');
   updateCamera(dt);
   updateHUD(dt);
@@ -540,7 +544,7 @@ function updateFx(dt, inp) {
     const [x, z] = wheelPos(b.wheelR, side * b.track / 2);
     // дым только в настоящем заносе (большой угол), а не от простого газа в повороте
     if (settings.smoke && slip > 0.55 && spd > 8 && !veh.offroad && Math.abs(veh.beta) > 0.35) {
-      if (Math.random() < (q > 0 ? 4 : 2) * dt * Math.min(1, (Math.abs(veh.beta) - 0.3) * 3)) W.smoke.emit(x, veh.roadY, z, veh.vx, veh.vz, slip, W.map.night ? 0.14 : 0.2);
+      if (Math.random() < (q > 0 ? 2 : 1) * dt * Math.min(1, (Math.abs(veh.beta) - 0.3) * 3)) W.smoke.emit(x, veh.roadY, z, veh.vx, veh.vz, slip, W.map.night ? 0.1 : 0.15);
     }
     if (settings.smoke && veh.offroad && spd > 4 && Math.random() < 5 * dt) W.dust.emit(x, veh.roadY, z, veh.vx, veh.vz, 1, 0.55);
     W.skids.add(side > 0 ? 0 : 1, x, veh.roadY, z, lx, lz, !veh.offroad && slip > 0.42 ? Math.min(1, (slip - 0.3) * 1.6) : 0);
@@ -549,7 +553,6 @@ function updateFx(dt, inp) {
   }
   // соперники тоже дымят в поворотах
   for (const r of W.rivals) {
-    if (settings.smoke && Math.abs(r.pose.k) * r.v * r.v > 9 && Math.random() < 1.5 * dt) W.smoke.emit(r.x, r.y, r.z, r.vx, r.vz, 0.6, 0.25);
   }
   W.smoke.update(dt); W.dust.update(dt);
   if (W.snow) W.snow.update(dt, camera);
