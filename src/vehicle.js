@@ -73,7 +73,7 @@ export class Vehicle {
     const spd = Math.hypot(u, v);
 
     // ---------- рулевое управление ----------
-    const speedFactor = 1 / (1 + Math.max(0, Math.abs(u) - 5) / ((s.steerFade ?? 22) * (opts.easy ? 0.85 : 1)));
+    const speedFactor = 1 / (1 + Math.max(0, Math.abs(u) - 5) / ((s.steerFade ?? 22) * (opts.easy ? 1.35 : 1)));
     let target = input.steer * s.steerMax * speedFactor;
     // помощь в дрифте: автоматическая контррулёжка по углу скольжения
     const beta = spd > 3 ? Math.atan2(v, Math.max(Math.abs(u), 0.5)) : 0;
@@ -170,7 +170,7 @@ export class Vehicle {
     const lsR = 1 - 0.14 * Math.min(1, (dFz * (1 - rf)) / (Fzr / 2)) ** 2;
     // лёгкий режим: на скорости машина цепче держит поворот (если не дрифтишь специально ручником/заносом)
     let hsGrip = 1;
-    if (calm) hsGrip = 1 + 0.3 * clamp((spd - 18) / 30, 0, 1);
+    if (calm) hsGrip = 1 + 0.8 * clamp((spd - 15) / 30, 0, 1);
     const FmaxF = muF * Fzf * lsF * hsGrip, FmaxR = muR * Fzr * lsR * hsGrip;
 
     // ---------- продольные силы ----------
@@ -282,8 +282,12 @@ export class Vehicle {
     // стабилизация на скорости в лёгком режиме: гасим резкие «виляния», если не в заносе
     if (calm && u > 12) {
       const rTarget = u * Math.tan(this.steer) / this.L * 0.95;
-      const lim = 9.81 * 1.3 / Math.max(u, 1); // не круче, чем позволяет ~1.3g
-      this.r += (clamp(rTarget, -lim, lim) - this.r) * Math.min(1, 4 * dt);
+      const gMax = 1.3 + 0.9 * clamp((u - 15) / 30, 0, 1); // аркадно: на скорости держит до ~2.2g
+      const lim = 9.81 * gMax / Math.max(u, 1);
+      this.r += (clamp(rTarget, -lim, lim) - this.r) * Math.min(1, 5 * dt);
+      // «помощь в повороте»: если руль заложен сильнее, чем можно пройти, машина сама слегка сбрасывает скорость
+      const want = Math.abs(rTarget) * u / 9.81;
+      if (want > gMax && throttle < 0.9) { const k2 = Math.min(0.5, (want - gMax) * 0.9) * dt; this.vx -= this.vx * k2; this.vz -= this.vz * k2; }
       // гасим боковое скольжение кузова
       const k = Math.min(1, 3 * dt);
       const fx = sh, fz = ch;

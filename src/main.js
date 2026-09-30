@@ -203,6 +203,18 @@ function spawnRivals(n) {
     model._tailBase = W.map.night ? 1.2 : 0.35;
     W.group.add(model.root);
     const r = new Rival(spec, model, grid[i][0], grid[i][1], 0.82 + Math.random() * 0.13, W.map.grip);
+    // свои копии материалов, чтобы делать соперника полупрозрачным «призраком» вблизи
+    r.ghostMats = []; r.outlines = [];
+    const cache = new Map();
+    model.root.traverse((o) => {
+      if (!o.isMesh) return;
+      if (o.material.isShaderMaterial) { r.outlines.push(o); return; }
+      if (!cache.has(o.material)) {
+        const m = o.material.clone(); m.userData.baseOp = o.material.transparent ? o.material.opacity : 1; m.transparent = true;
+        cache.set(o.material, m); r.ghostMats.push(m);
+      }
+      o.material = cache.get(o.material);
+    });
     r.ahead = grid[i][0] > 6 || (grid[i][0] === 6 && false);
     r.place(W.track, 0);
     W.rivals.push(r);
@@ -226,12 +238,12 @@ function updateCamera(dt, instant = false) {
   const w = clamp((veh.u - 3) / 8, 0, 1) * 0.45;
   const target = veh.h + clamp(angDiff(Math.atan2(veh.vx, veh.vz), veh.h), -0.7, 0.7) * w;
   if (instant) cam.h = target;
-  cam.h += angDiff(target, cam.h) * Math.min(1, dt * 3.5);
+  cam.h += angDiff(target, cam.h) * Math.min(1, dt * 6);
   const k = instant ? 1 : 1 - Math.exp(-dt * 7);
   let fov = 60 + Math.min(9, spd * 0.12);
   const des = new THREE.Vector3(), look = new THREE.Vector3();
   if (cam.mode === 0 || cam.mode === 1) {
-    const dist = cam.mode === 0 ? 6.3 : 9.8, hgt = cam.mode === 0 ? 2.2 : 3.6;
+    const dist = cam.mode === 0 ? 5.4 : 8.2, hgt = cam.mode === 0 ? 1.9 : 3.0;
     // камера жёстко привязана к машине на постоянном расстоянии (на скорости не «отстаёт»);
     // сглаживается только поворот камеры и высота — поэтому картинка плавная, но машина всегда рядом
     if (instant || cam.y === undefined) cam.y = cy + hgt;
@@ -352,6 +364,17 @@ function physicsStep(inp) {
   }
 }
 
+function updateGhosts() {
+  const { veh } = W.player;
+  for (const r of W.rivals) {
+    const d = Math.hypot(r.x - veh.x, r.z - veh.z);
+    const op = clamp((d - 4) / 14, 0.3, 1);
+    if (Math.abs(op - (r.op ?? 1)) < 0.02) continue;
+    r.op = op;
+    for (const m of r.ghostMats) m.opacity = op * (m.userData.baseOp ?? 1);
+    for (const o of r.outlines) o.visible = op > 0.95;
+  }
+}
 function collideRivals() {
   const { veh } = W.player;
   const pc = (x, z, h, k) => [x + Math.sin(h) * k, z + Math.cos(h) * k];
@@ -422,7 +445,8 @@ function updateRace(dt) {
 
   // соперники
   for (const r of W.rivals) r.update(dt, track, { idx: veh.idx, lat: veh.lat, t: G.elapsed }, G.started);
-  if (state !== 'countdown') collideRivals();
+  // соперники — «призраки»: сквозь них можно проезжать, столкновений нет
+  updateGhosts();
   track.update(veh.idx);
 
   // респаун отставших соперников впереди + обгоны
