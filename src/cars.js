@@ -132,10 +132,10 @@ export const CARS = [
     },
   },
   {
-    id: 'toro', name: 'TORO V16', tag: 'Суперкар-клин',
+    id: 'toro', name: 'TORO V12', tag: 'Суперкар-клин',
     desc: 'Острый клин с V12 за спиной и полным приводом. Самая быстрая машина в гараже.',
     colors: ['#9bd600', '#ff9f1c', '#ffdd00', '#111111', '#e5e5e5', '#7209b7'],
-    hp: 1200, mass: 1550, torque: 1100, redline: 12000, idle: 1000, peakAt: 0.78, cylinders: 12,
+    hp: 740, mass: 1550, torque: 720, redline: 8700, idle: 1000, peakAt: 0.78, cylinders: 12,
     gears: [3.1, 2.25, 1.7, 1.35, 1.1, 0.9, 0.76], finalDrive: 3.5, wheelRadius: 0.35,
     drive: 'AWD', awdFront: 0.3, wheelbase: 2.7, frontWeight: 0.43, cgHeight: 0.42,
     muFront: 1.3, muRear: 1.3, tireB: 10, tireC: 1.45, steerMax: 0.55, steerFade: 30,
