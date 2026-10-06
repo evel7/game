@@ -210,3 +210,6 @@ body.touch .gauge { right: 50%; transform: translateX(50%) scale(.7); transform-
 .touch-only { display: none; }
 body.touch .touch-only { display: block; }
 #hud-fs { pointer-events: auto; position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 30; padding: 4px 10px; font-size: 18px; background: rgba(0,0,0,.45); color: #fff; border: 1px solid rgba(255,255,255,.25); border-radius: 8px; }
+
+.lobby-codebox { margin: 10px 0 4px; padding: 10px 12px; border-radius: 10px; background: rgba(255,204,0,.12); border: 1px solid rgba(255,204,0,.45); font-size: 16px; text-align: center; }
+.lobby-codebox b { color: #ffcc00; font-size: 26px; letter-spacing: 6px; margin-left: 8px; user-select: text; -webkit-user-select: text; }
