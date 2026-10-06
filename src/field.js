@@ -14,8 +14,10 @@ const N = CS / RES;   // клеток в чанке
 const RAD = 3;        // радиус чанков вокруг игрока
 
 export class Field {
-  constructor(scene, map, seed = 1, quality = 1) {
+  // opts.props — расставлять объекты (препятствия, декорации); opts.flat — ровная земля без холмов
+  constructor(scene, map, seed = 1, quality = 1, opts = {}) {
     this.isField = true;
+    this.props = opts.props !== false; this.flat = !!opts.flat;
     this.scene = scene; this.map = map; this.seed = seed; this.quality = quality;
     this.f = map.field;
     this.hw = 1e9; this.wall = 1e9; this.base = 0; this.lastIdx = 1e9; this.sh = 0;
@@ -30,8 +32,11 @@ export class Field {
   // ---------- рельеф ----------
   H(x, z) {
     const f = this.f, s = this.seed;
-    let y = (fbm2(x * f.freq, z * f.freq, s + 3, 4) - 0.5) * f.amp * 2;
-    y += (fbm2(x * f.freq * 3.1, z * f.freq * 3.1, s + 41, 2) - 0.5) * f.amp * 0.35;
+    let y = 0;
+    if (!this.flat) {
+      y = (fbm2(x * f.freq, z * f.freq, s + 3, 4) - 0.5) * f.amp * 2;
+      y += (fbm2(x * f.freq * 3.1, z * f.freq * 3.1, s + 41, 2) - 0.5) * f.amp * 0.35;
+    }
     // ровная площадка на старте
     const r = Math.hypot(x, z);
     y *= smooth(clamp((r - 25) / 60, 0, 1));
@@ -161,7 +166,7 @@ export class Field {
     mesh.receiveShadow = this.quality > 0;
     grp.add(mesh);
     grp.userData.col = [];
-    this.buildProps(grp, ci, cj);
+    if (this.props) this.buildProps(grp, ci, cj);
     this.root.add(grp);
     this.chunks.set(ci + ',' + cj, grp);
   }

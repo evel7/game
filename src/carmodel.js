@@ -37,6 +37,16 @@ const STYLE = {
   tora: { spokes: 5, rim: 0xd6d8dc, caliper: 0xd62828, rimDepth: 0.07, plate: '01 KG 002 JZ' },
   toro: { spokes: 10, rim: 0x1c1c1f, caliper: 0xff8c00, rimDepth: 0.02, plate: '01 KG 012 LP' },
   stutt: { spokes: 5, rim: 0xc9ccd2, caliper: 0xffd000, rimDepth: 0.03, plate: '01 KG 911 SS' },
+  shiro: { spokes: 8, rim: 0xc0c3c8, caliper: 0x444444, rimDepth: 0.07, plate: '01 KG 086 AE' },
+  hayate: { spokes: 6, rim: 0xe8e8e8, caliper: 0xd62828, rimDepth: 0.04, plate: '01 KG 009 EV', cage: true },
+  sakura: { spokes: 5, rim: 0x2b2d42, caliper: 0xff4d6d, rimDepth: 0.07, plate: '01 KG 015 SL' },
+  stallion: { spokes: 5, rim: 0x1c1c1f, caliper: 0xd62828, rimDepth: 0.04, plate: '01 KG 050 GT' },
+  pixel: { spokes: 5, rim: 0x8d99ae, caliper: 0xd62828, rimDepth: 0.03, plate: '01 KG 007 GT' },
+  estate: { spokes: 10, rim: 0x3c3f45, caliper: 0xd62828, rimDepth: 0.03, plate: '01 KG 006 RS' },
+  aurora: { spokes: 10, rim: 0x111114, caliper: 0x00f5d4, rimDepth: 0.02, plate: '01 KG 001 HX' },
+  bars: { spokes: 6, rim: 0x2b2b2b, caliper: 0x555555, rimDepth: 0.06, plate: '01 KG 444 OR' },
+  baron: { spokes: 7, rim: 0xb8bcc4, caliper: 0x1d3f8f, rimDepth: 0.04, plate: '01 KG 005 MB' },
+  mamba: { spokes: 5, rim: 0x1c1c1f, caliper: 0xffba08, rimDepth: 0.04, plate: '01 KG 010 VR' },
 };
 
 // ---------- утилиты ----------

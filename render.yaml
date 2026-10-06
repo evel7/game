@@ -1,0 +1,12 @@
+# Render Blueprint: бесплатный онлайн-сервер для ENDLESS DRIFT.
+# Render → New → Blueprint → выбрать этот репозиторий → Apply.
+services:
+  - type: web
+    name: endless-drift-server
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: node index.js
+    healthCheckPath: /
+    autoDeploy: true

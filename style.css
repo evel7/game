@@ -109,7 +109,7 @@ body.touch .gauge { right: 50%; transform: translateX(50%) scale(.7); transform-
 
 @media (max-width: 700px) {
   .logo { font-size: 34px; }
-  .panel-left { width: 100vw; padding: 20px; }
+  .panel-left, .panel-right { width: 100vw; padding: 20px; }
   .hud-timer { font-size: 32px; }
   .hud-score { font-size: 24px; }
 }
@@ -136,3 +136,37 @@ body.touch .gauge { right: 50%; transform: translateX(50%) scale(.7); transform-
 #map-cards { display: grid; grid-template-columns: repeat(3, 1fr); }
 #map-cards .card { padding: 10px 14px; }
 @media (max-width: 700px) { #map-cards { grid-template-columns: repeat(2, 1fr); } }
+
+/* ===== обновление: длина трассы, онлайн, езда назад ===== */
+.panel-right { right: 0; top: 0; bottom: 0; width: 420px; max-width: 94vw; padding: 30px 28px; flex-direction: column; gap: 10px; overflow-y: auto;
+  background: linear-gradient(270deg, rgba(8,8,16,.92), rgba(8,8,16,.75) 80%, rgba(8,8,16,0)); }
+.len-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.len-row input[type=range] { flex: 1 1 220px; accent-color: #ffcc00; height: 26px; }
+.len-row input[type=range].off { opacity: .35; }
+.len-val { font-size: 26px; font-weight: 900; font-style: italic; min-width: 86px; color: #ffcc00; }
+.len-hint { opacity: .7; font-size: 13px; display: block; margin-top: 4px; }
+.opt input[type=text], .join-row input, .srv input { background: #1c1c28; color: #fff; border: 1px solid #444; border-radius: 8px; padding: 8px 10px; font-size: 15px; }
+.opt input[type=text] { max-width: 190px; }
+.join-row { display: flex; gap: 10px; }
+.join-row input { width: 110px; text-transform: uppercase; font-size: 20px; font-weight: 800; letter-spacing: 4px; text-align: center; }
+.join-row .btn { flex: 1; }
+.online-status { min-height: 20px; font-size: 14px; color: #9fe8ff; }
+.online-status.err { color: #ff7b7b; }
+.srv { font-size: 13px; opacity: .8; }
+.srv summary { cursor: pointer; }
+.srv input { width: 100%; margin: 6px 0 4px; font-size: 13px; }
+.lobby-code { color: #ffcc00; letter-spacing: 4px; font-style: italic; margin-left: 6px; user-select: text; -webkit-user-select: text; }
+.lobby-count { font-size: 13px; opacity: .8; margin-top: 4px; }
+#lobby-players { display: flex; flex-direction: column; gap: 6px; }
+.lp { display: grid; grid-template-columns: 16px 1fr auto; gap: 10px; align-items: center; background: rgba(255,255,255,.06); padding: 8px 12px; border-radius: 10px; font-size: 15px; }
+.lp i { width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(255,255,255,.4); }
+.lp span { font-size: 12px; opacity: .7; }
+.car-switch.small .btn.arrow { padding: 6px 12px; font-size: 16px; }
+.lobby-car { font-size: 22px; font-weight: 900; font-style: italic; text-align: center; }
+.results table { width: 100%; border-collapse: collapse; font-size: 15px; }
+.results td { padding: 5px 4px; border-bottom: 1px solid rgba(255,255,255,.08); }
+.results td:last-child { text-align: right; font-weight: 700; }
+.results tr.dnf { opacity: .55; }
+.results h3 { font-size: 14px; letter-spacing: 1px; text-transform: uppercase; color: #ffcc00; margin: 6px 0 4px; }
+.results small { opacity: .7; font-size: 12px; }
+.btn:disabled { opacity: .5; pointer-events: none; }

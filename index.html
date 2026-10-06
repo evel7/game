@@ -17,6 +17,7 @@
     <div class="logo">ENDLESS<span>DRIFT</span></div>
     <div class="subtitle">бесконечная 3D-гонка</div>
     <button class="btn big" data-go="setup">▶ Играть</button>
+    <button class="btn" data-go="online">🌐 Онлайн</button>
     <button class="btn" data-go="garage">🚗 Гараж</button>
     <button class="btn" data-go="records">🏆 Рекорды</button>
     <button class="btn" data-go="settings">⚙ Настройки</button>
@@ -30,6 +31,8 @@
     <div class="cards" id="mode-cards"></div>
     <h2>Карта</h2>
     <div class="cards" id="map-cards"></div>
+    <h2 id="opts-title">Длина трассы</h2>
+    <div id="setup-opts"></div>
     <div class="setup-bottom">
       <div class="setup-car">Машина: <b id="setup-car-name"></b> <button class="btn small" data-go="garage">сменить</button></div>
       <div class="row">
@@ -114,6 +117,48 @@
     <div class="row"><button class="btn" data-go="main">← Меню</button></div>
   </div>
 
+  <!-- ===== Онлайн: подключение ===== -->
+  <div id="menu-online" class="screen panel-right">
+    <h2>Онлайн</h2>
+    <p class="hint">Гоняй с друзьями по одной и той же трассе. До 8 игроков в комнате. Машины других игроков — «призраки» (сквозь них можно проезжать).</p>
+    <label class="opt">Твоё имя <input type="text" id="on-name" maxlength="16" placeholder="Игрок" /></label>
+    <button class="btn big accent" id="on-quick">⚡ Быстрая игра</button>
+    <button class="btn" id="on-create">➕ Создать комнату</button>
+    <div class="join-row"><input type="text" id="on-code" maxlength="4" placeholder="КОД" /><button class="btn" id="on-join">Войти по коду</button></div>
+    <div class="online-status" id="online-status"></div>
+    <details class="srv"><summary>Адрес сервера</summary>
+      <input type="text" id="on-server" placeholder="wss://…" />
+      <small>Оставь пустым, чтобы использовать сервер по умолчанию.</small>
+    </details>
+    <div class="row"><button class="btn" id="on-back">← Меню</button></div>
+  </div>
+
+  <!-- ===== Онлайн: лобби ===== -->
+  <div id="menu-lobby" class="screen panel-right">
+    <h2>Комната <span class="lobby-code" id="lobby-code"></span></h2>
+    <div class="hud-small" id="lobby-type"></div>
+    <div class="lobby-count" id="lobby-count"></div>
+    <div id="lobby-players"></div>
+    <div class="car-switch small">
+      <button class="btn arrow" id="lobby-prev">◀</button>
+      <div><div class="car-tag">твоя машина</div><div class="lobby-car" id="lobby-car"></div></div>
+      <button class="btn arrow" id="lobby-next">▶</button>
+    </div>
+    <div id="lobby-host">
+      <label class="opt">Карта <select id="lc-map"></select></label>
+      <label class="opt" id="lc-mode-row">Режим <select id="lc-mode"></select></label>
+      <label class="opt" id="lc-len-row">Длина трассы <select id="lc-len"></select></label>
+      <label class="opt" id="lc-fm-row">Полигон <select id="lc-fm"><option value="obst">С препятствиями</option><option value="clean">Чистое поле</option><option value="flat">Чистое и ровное</option></select></label>
+    </div>
+    <div id="lobby-guest"><div class="hud-small">Настройки хоста:</div><b id="lobby-conf-text"></b></div>
+    <div class="hint" id="lobby-wait"></div>
+    <div id="lobby-results" class="results"></div>
+    <div class="row">
+      <button class="btn" id="lobby-leave">← Выйти</button>
+      <button class="btn big accent" id="lobby-start">СТАРТ</button>
+    </div>
+  </div>
+
   <!-- ===== HUD ===== -->
   <div id="hud" class="hidden">
     <div class="hud-tl">
@@ -168,6 +213,7 @@
     <h2 id="over-title">Время вышло!</h2>
     <div class="over-record" id="over-record">🏆 НОВЫЙ РЕКОРД!</div>
     <div id="over-stats"></div>
+    <div id="online-results" class="results hidden"></div>
     <button class="btn big accent" id="btn-again">Ещё раз</button>
     <button class="btn" id="btn-over-menu">В меню</button>
   </div>
@@ -175,6 +221,6 @@
   <div id="countdown"></div>
   <div id="fps" class="hidden"></div>
 
-  <script src="dist/game.js?v=1790799358821"></script>
+  <script src="dist/game.js?v=1791278680001"></script>
 </body>
 </html>

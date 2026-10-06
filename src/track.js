@@ -18,8 +18,10 @@ export const CP_EVERY = 500;  // чекпоинт каждые 1000 м
 const CP_FIRST = 400;
 
 export class Track {
-  constructor(scene, map, seed = 1, quality = 1) {
+  constructor(scene, map, seed = 1, quality = 1, opts = {}) {
     this.scene = scene; this.map = map; this.seed = seed; this.quality = quality;
+    // finishIdx — индекс точки финиша (трасса заданной длины); Infinity — бесконечная трасса
+    this.finishIdx = opts.finishIdx ?? Infinity;
     this.rnd = mulberry32(seed * 9301 + 49297);
     this.hw = map.road.halfWidth;
     this.sh = map.road.shoulder;
@@ -231,6 +233,11 @@ export class Track {
     });
     this.gateMatCP = new THREE.MeshBasicMaterial({ map: gateTex('ЧЕКПОИНТ'), side: THREE.DoubleSide });
     this.gateMatStart = new THREE.MeshBasicMaterial({ map: gateTex('СТАРТ'), side: THREE.DoubleSide });
+    this.gateMatFinish = new THREE.MeshBasicMaterial({ map: gateTex('ФИНИШ'), side: THREE.DoubleSide });
+    // клетчатая финишная полоса на асфальте
+    this.finishLineMat = new THREE.MeshBasicMaterial({ map: canvasTexture(256, 32, (c, w, h) => {
+      for (let x = 0; x < w; x += 16) for (let y = 0; y < h; y += 16) { c.fillStyle = ((x + y) / 16) % 2 ? '#111' : '#f4f4f4'; c.fillRect(x, y, 16, 16); }
+    }), side: THREE.DoubleSide });
     this.pillarMat = new THREE.MeshStandardMaterial({ color: 0x222228, roughness: 0.6 });
     // атлас рекламных баннеров (придуманные спонсоры)
     const SP = [['ASMAN OIL', '#ffd400', '#111'], ['NITRO-X', '#111', '#39ff14'], ['ТУРБО KG', '#d62828', '#fff'], ['DRIFT LAB', '#fff', '#111'],
@@ -406,7 +413,8 @@ export class Track {
     // ворота чекпоинтов и старта
     for (let i = i0; i < i1; i++) {
       if (i === 28) { this.buildGate(grp, i, this.gateMatStart); this.buildStands(grp, i + 12); }
-      if (i >= CP_FIRST && (i - CP_FIRST) % CP_EVERY === 0) { this.buildGate(grp, i, this.gateMatCP); this.buildStands(grp, i - 14); }
+      if (i >= CP_FIRST && (i - CP_FIRST) % CP_EVERY === 0 && i < this.finishIdx - 100) { this.buildGate(grp, i, this.gateMatCP); this.buildStands(grp, i - 14); }
+      if (i === this.finishIdx) { this.buildGate(grp, i, this.gateMatFinish); this.buildFinishLine(grp, i); this.buildStands(grp, i - 14); this.buildStands(grp, i + 20); }
     }
 
     this.root.add(grp);
@@ -660,6 +668,15 @@ export class Track {
         grp.add(post);
       }
     }
+  }
+
+  buildFinishLine(grp, i) {
+    const p = this.P(i);
+    const g = new THREE.PlaneGeometry(this.hw * 2, 2); g.rotateX(-Math.PI / 2);
+    const line = new THREE.Mesh(g, this.finishLineMat);
+    line.rotation.y = p.h; // ось X плоскости — поперёк трассы
+    line.position.set(p.x, p.y + 0.04, p.z);
+    grp.add(line);
   }
 
   buildGate(grp, i, mat) {

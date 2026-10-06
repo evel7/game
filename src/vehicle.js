@@ -96,7 +96,7 @@ export class Vehicle {
     const gears = s.gears;
     const wheelRpmFromSpeed = (gear) => Math.abs(u) / s.wheelRadius * gears[Math.abs(gear) - 1] * s.finalDrive * 60 / (2 * Math.PI);
     if (this.shiftTimer > 0) this.shiftTimer -= dt;
-    let wantReverse = input.brake > 0.1 && input.throttle < 0.1 && u < 1.0;
+    let wantReverse = input.brake > 0.1 && input.throttle < 0.1 && u < 1.0 && !input.noReverse;
     if (this.gear === -1) {
       if (input.throttle > 0.1 && u > -1.0) this.gear = 1;
     } else if (wantReverse && Math.abs(u) < 0.6 && this.revHold > 0.25) {

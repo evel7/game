@@ -12,6 +12,8 @@ export class Input {
     this.touch = { left: false, right: false, gas: false, brake: false, hb: false };
     this.touchActive = false;
     window.addEventListener('keydown', (e) => {
+      // в полях ввода (имя, код комнаты) клавиши не управляют машиной
+      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
       if (!e.repeat) {
         const map = { KeyC: 'camera', KeyR: 'reset', Escape: 'pause', KeyP: 'pause', KeyE: 'shiftUp', KeyQ: 'shiftDown', KeyM: 'mute', Enter: 'enter' };
