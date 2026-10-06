@@ -26,7 +26,8 @@ const cleanName = (s) => String(s || '').replace(/[<>&"']/g, '').trim().slice(0,
 function makeCode() {
   const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let c;
-  do { c = Array.from({ length: 4 }, () => A[Math.floor(Math.random() * A.length)]).join(''); } while (rooms.has(c));
+  // 6 символов, обязательно есть буквы и цифры — угадать случайно практически невозможно
+  do { c = Array.from({ length: 6 }, () => A[Math.floor(Math.random() * A.length)]).join(''); } while (rooms.has(c) || !/\d/.test(c) || !/[A-Z]/.test(c));
   return c;
 }
 
@@ -36,6 +37,7 @@ function cleanConfig(c = {}) {
     mode: MODES.includes(c.mode) ? c.mode : 'race',
     len: clampInt(c.len, 0, 50, 5) === 0 ? 0 : clampInt(c.len, 5, 50, 5),
     fieldMode: ['obst', 'clean', 'flat'].includes(c.fieldMode) ? c.fieldMode : 'obst',
+    car: clampInt(c.car, -1, 99, -1), // -1 = любые машины, иначе только эта
   };
 }
 
@@ -98,10 +100,11 @@ function mmCheck(room) {
 function startRoomRace(room) {
   room.state = 'racing';
   room.seed = Math.floor(Math.random() * 1e6);
-  room.racers = new Set(room.players.keys());
+  // если хост выбрал определённую машину — едут только игроки на ней
+  room.racers = new Set([...room.players.values()].filter((p) => room.config.car < 0 || p.car === room.config.car).map((p) => p.id));
   room.done = new Set();
   room.results = [];
-  for (const p of room.players.values()) p.inRace = true;
+  for (const p of room.players.values()) p.inRace = room.racers.has(p.id);
   broadcast(room, { t: 'start', seed: room.seed, config: room.config, racers: [...room.racers], players: [...room.players.values()].map(pub) });
 }
 function send(ws, msg) { if (ws.readyState === 1) ws.send(JSON.stringify(msg)); }
@@ -136,7 +139,7 @@ function join(client, msg) {
   let room = null;
   if (msg.code) {
     room = rooms.get(String(msg.code).toUpperCase().trim());
-    if (!room) return send(client.ws, { t: 'error', text: 'Комната не найдена. Проверь код.' });
+    if (!room || room.mm) return send(client.ws, { t: 'error', text: 'Комната не найдена. Проверь код.' });
   } else if (msg.mm || msg.quick) {
     // быстрый матч: ищем комнату, где совпадают режим, длина, размер и все требования по машинам
     client.car = clampInt(msg.car, 0, 99, 0);
@@ -204,7 +207,15 @@ wss.on('connection', (ws) => {
         broadcast(room, { t: 'config', config: room.config });
         break;
       case 'start':
-        if (!room || room.mm || room.host !== client.id || room.state !== 'lobby') break;
+        if (!room || room.mm || room.host !== client.id) break;
+        // если прошлый заезд ещё не закончен (кто-то не доехал / бесконечная трасса / свернул вкладку),
+        // хост может начать новый: недоехавшие записываются как сошедшие
+        if (room.state === 'racing') {
+          for (const id of room.racers) if (room.players.has(id) && !room.done.has(id)) {
+            const p = room.players.get(id); room.done.add(id);
+            room.results.push({ id, name: p.name, finished: false, time: 0, score: 0 });
+          }
+        }
         startRoomRace(room);
         break;
       case 's': // состояние машины → всем остальным в комнате
