@@ -83,7 +83,8 @@ export class Vehicle {
     const spd = Math.hypot(u, v);
 
     // ---------- рулевое управление ----------
-    const speedFactor = 1 / (1 + Math.max(0, Math.abs(u) - 5) / ((s.steerFade ?? 22) * (opts.easy ? 1.35 : 1)));
+    // руль на скорости: угол уменьшается мягче, чем раньше, — машины уверенно поворачивают и на высокой скорости
+    const speedFactor = 1 / (1 + Math.max(0, Math.abs(u) - 6) / ((s.steerFade ?? 22) * (opts.easy ? 1.9 : 1.6)));
     let target = input.steer * s.steerMax * speedFactor;
     // помощь в дрифте: автоматическая контррулёжка по углу скольжения
     const beta = spd > 3 ? Math.atan2(v, Math.max(Math.abs(u), 0.5)) : 0;
@@ -96,7 +97,8 @@ export class Vehicle {
     const calm = opts.easy && this.intent <= 0;
     if (opts.assist > 0 && u > 3) {
       // у цепких машин вне заноса контрруль слабее — иначе после поворота машину раскачивает
-      const ak = Math.abs(beta) > 0.35 || input.handbrake > 0.1 ? 1 : 1 - 0.65 * this.gripK;
+      // и вообще не мешает обычному повороту без заноса (раньше «съедал» часть руля)
+      const ak = (Math.abs(beta) > 0.35 || input.handbrake > 0.1 ? 1 : 1 - 0.65 * this.gripK) * clamp((Math.abs(beta) - 0.06) / 0.14, 0, 1);
       target += clamp(beta, -0.9, 0.9) * 0.85 * opts.assist * ak * (1 - 0.5 * Math.abs(input.steer));
     }
     target = clamp(target, -s.steerMax * 1.25, s.steerMax * 1.25);
@@ -188,7 +190,8 @@ export class Vehicle {
     const gk = input.handbrake > 0.1 ? 0 : this.gripK;
     // дрифт-машины тоже должны уметь пройти поворот на скорости: небольшой запас сцепления сзади (ручник/пинок по-прежнему срывают)
     const gkR = input.handbrake > 0.1 || this.kickT > 0 ? 0 : Math.max(this.gripK, 0.3);
-    const FmaxF = muF * Fzf * lsF * hsGrip * (1 + gk * 0.08), FmaxR = muR * Fzr * lsR * hsGrip * (1 + gkR * (opts.real ? 0.28 : 0.16));
+    // передняя ось получает тот же запас, что и задняя, иначе машина «плывёт» прямо (недостаточная поворачиваемость)
+    const FmaxF = muF * Fzf * lsF * hsGrip * (1 + gkR * (opts.real ? 0.32 : 0.2)), FmaxR = muR * Fzr * lsR * hsGrip * (1 + gkR * (opts.real ? 0.28 : 0.16));
 
     // ---------- продольные силы ----------
     let FxF = 0, FxR = 0;
@@ -200,7 +203,8 @@ export class Vehicle {
     const brakeInput = this.gear === -1 ? input.throttle : input.brake;
     const wantBrake = brakeInput > 0 && Math.abs(u) > 0.3 ? brakeInput : 0;
     if (wantBrake > 0) {
-      const Fb = s.brakeForce * wantBrake;
+      // тормоза сильнее; тяжёлым машинам — минимум ~1g, чтобы монстр-трак и вэн не тормозили «вечность»
+      const Fb = Math.max(s.brakeForce * 1.3, s.mass * G * 1.05) * wantBrake;
       FxF += -sign(u) * Fb * 0.64;
       FxR += -sign(u) * Fb * 0.36;
     }
@@ -301,7 +305,7 @@ export class Vehicle {
     // стабилизация на скорости в лёгком режиме: гасим резкие «виляния», если не в заносе
     if (calm && u > 12) {
       const rTarget = u * Math.tan(this.steer) / this.L * 0.95;
-      const gMax = 1.3 + 0.9 * clamp((u - 15) / 30, 0, 1); // аркадно: на скорости держит до ~2.2g
+      const gMax = 1.55 + 1.0 * clamp((u - 15) / 30, 0, 1); // аркадно: на скорости держит до ~2.2g
       const lim = 9.81 * gMax / Math.max(u, 1);
       this.r += (clamp(rTarget, -lim, lim) - this.r) * Math.min(1, 5 * dt);
       // «помощь в повороте»: если руль заложен сильнее, чем можно пройти, машина сама слегка сбрасывает скорость

@@ -623,7 +623,9 @@ export function buildCarModel(spec, color, opts = {}) {
 
   // ===== колёса: pivot (руление) → wheel (вращение) =====
   const wheels = [];
-  const cy = wr + (b.ride ?? 0);
+  // колёса всегда стоят на земле (центр = радиус); ride поднимает только кузов и арки —
+  // раньше колёса поднимались вместе с кузовом, и BIGFOOT «висел» над землёй
+  const cy = wr;
   const caliperMat = new THREE.MeshStandardMaterial({ color: st.caliper, roughness: 0.4, metalness: 0.3 });
   for (const [z, sx, front] of [[b.wheelF, 1, true], [b.wheelF, -1, true], [b.wheelR, 1, false], [b.wheelR, -1, false]]) {
     const pivot = new THREE.Group();

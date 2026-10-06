@@ -727,7 +727,15 @@ function updateScoring(dt, veh) {
   }
 
   // --- финиш ---
-  if (G.finite && veh.idx >= G.finishIdx) { finishRace(true); return; }
+  if (G.finite && veh.idx >= G.finishIdx) {
+    // точное время пересечения линии внутри кадра (интерполяция), а не «кадр, в котором заметили» —
+    // важно, когда игроки финишируют почти одновременно
+    const li = G.lastIdx ?? veh.idx;
+    if (veh.idx > li && li < G.finishIdx) G.elapsed -= dt * (1 - Math.min(1, Math.max(0, (G.finishIdx - li) / (veh.idx - li))));
+    G.elapsed = Math.round(G.elapsed * 1000) / 1000;
+    finishRace(true); return;
+  }
+  G.lastIdx = veh.idx;
 
   // --- чекпоинты ---
   if (veh.idx >= G.nextCp && veh.idx < G.finishIdx - 100) {
@@ -755,7 +763,9 @@ function updateScoring(dt, veh) {
     let ahead = 0;
     for (const p of net.players.values()) {
       if (!net.racers.includes(p.id)) continue;
-      if ((p.fin && p.fin.finished) || (!p.fin && p.vis && p.vis.idx > veh.idx)) ahead++;
+      // для места берём самое свежее полученное положение, а не сглаженное (оно отстаёт на ~70 мс)
+      const last = p.buf && p.buf.length ? p.buf[p.buf.length - 1].idx : (p.vis ? p.vis.idx : 0);
+      if ((p.fin && p.fin.finished) || (!p.fin && last > veh.idx)) ahead++;
     }
     G.place = 1 + ahead;
   }
@@ -764,6 +774,7 @@ function updateScoring(dt, veh) {
 // ключ рекорда: режим + карта (+ длина трассы, если она задана)
 const recKey = (modeId, mapId, lenKm) => `${modeId}_${mapId}${lenKm ? '_' + lenKm : ''}`;
 // на трассе с финишем в Гонке и Свободной езде рекорд — лучшее время, в Дрифте — очки
+const onlinePlace = (t) => 1 + net.results.filter((r) => r.finished && r.id !== net.id && r.time < t).length;
 const byTime = (modeId, lenKm) => lenKm > 0 && modeId !== 'drift';
 function finishRace(finished = false) {
   if (state === 'over') return;
@@ -771,11 +782,12 @@ function finishRace(finished = false) {
   if (G.mode.id === 'drift' || G.mode.id === 'field') G.score = G.driftTotal;
   G.finished = finished;
   if (finished && G.mode.id === 'race' && W.rivals.length) G.place = 1 + W.rivals.filter((r) => !r.out && r.finOrder !== undefined).length;
-  if (finished && G.mode.id === 'race' && G.online) G.place = 1 + net.results.filter((r) => r.finished).length;
+  // онлайн: место по точному времени финиша, а не по тому, чьё сообщение раньше дошло до сервера
+  if (finished && G.mode.id === 'race' && G.online) G.place = onlinePlace(G.elapsed);
   // Дрифт на трассе с финишем: итог = очки дрифта + бонус за время (быстрее 60 км/ч в среднем) + онлайн бонус за место на финише
   if (G.mode.id === 'drift' && G.finite) {
     G.timeBonus = finished ? Math.max(0, Math.round((G.lenKm * 60 - G.elapsed) * 50)) : 0;
-    G.finPlace = finished && G.online ? 1 + net.results.filter((r) => r.finished).length : 0;
+    G.finPlace = finished && G.online ? onlinePlace(G.elapsed) : 0;
     G.placeBonus = [0, 5000, 3000, 1500][G.finPlace] || 0;
     G.score = G.driftTotal + G.timeBonus + G.placeBonus;
   }
@@ -1423,7 +1435,13 @@ net.on.joined = () => { net.mmSince = Date.now(); if (menuScreen === 'lobby') re
 net.on.player = () => { if (menuScreen === 'lobby') renderLobby(); };
 net.on.config = () => { if (menuScreen === 'lobby') renderLobby(); };
 net.on.left = (p) => { removeRemoteCar(p); if (menuScreen === 'lobby') renderLobby(); };
-net.on.fin = () => { renderOnlineResults(); };
+net.on.fin = (r) => {
+  // кто-то финишировал с лучшим временем, но его сообщение пришло позже — пересчитываем место
+  if (G && G.online && state === 'over' && G.finished && G.mode.id === 'race' && r && r.id !== net.id) {
+    G.place = onlinePlace(G.elapsed); $('over-title').textContent = `ФИНИШ! ${G.place} место`;
+  }
+  renderOnlineResults();
+};
 setInterval(() => {
   const el = document.getElementById('mm-wait-t');
   if (el && net.mmSince) { const t = Math.floor((Date.now() - net.mmSince) / 1000); el.textContent = `ожидание ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; }
