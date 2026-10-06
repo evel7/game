@@ -1,11 +1,11 @@
 // Онлайн: подключение к серверу (WebSocket), комнаты и приём позиций других игроков.
 // Сервер только пересылает данные; машины других игроков рисуются «призраками» (без столкновений),
-// их позиции плавно интерполируются с задержкой ~120 мс.
+// их позиции плавно интерполируются с задержкой ~70 мс.
 
 // Адрес сервера по умолчанию (Render: https://<имя-сервиса>.onrender.com → wss://…)
 export const DEFAULT_SERVER = 'wss://endless-drift-server.onrender.com';
-const INTERP_DELAY = 120; // мс
-const SEND_HZ = 15;
+const INTERP_DELAY = 70; // мс (при 30 обновлениях/с хватает запаса на 2 пакета)
+const SEND_HZ = 30; // было 15 — позиции соперников обновляются вдвое чаще
 
 export const net = {
   ws: null, id: 0, code: '', host: 0, isPublic: false, state: 'off', // off | connecting | lobby | racing | done
@@ -107,7 +107,7 @@ export const net = {
   // отправка своего состояния (не чаще SEND_HZ раз в секунду)
   sendState(veh) {
     const now = performance.now();
-    if (now - this.lastSend < 1000 / SEND_HZ) return;
+    if (now - this.lastSend < 1000 / SEND_HZ - 4) return; // −4 мс: при 60 FPS ровно каждый 2-й кадр
     this.lastSend = now;
     this.send({ t: 's', d: [veh.x, veh.roadY, veh.z, veh.h, veh.speed, veh.idx, veh.steer || 0, veh.slope || 0] });
   },
