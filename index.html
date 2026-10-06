@@ -44,7 +44,16 @@
 
   <!-- ===== Гараж ===== -->
   <div id="menu-garage" class="screen panel-left">
-    <h2>Гараж</h2>
+    <h2>Гараж <small class="garage-count" id="garage-count"></small></h2>
+    <div class="car-grid" id="car-grid"></div>
+    <div class="swatches" id="car-colors"></div>
+    <div class="row">
+      <button class="btn" data-go="main">← Меню</button>
+      <button class="btn accent" data-go="setup">Выбрать ✓</button>
+    </div>
+  </div>
+  <!-- характеристики выбранной машины — в углу экрана -->
+  <div id="garage-info" class="garage-info hidden">
     <div class="car-switch">
       <button class="btn arrow" id="car-prev">◀</button>
       <div><div class="car-name" id="car-name"></div><div class="car-tag" id="car-tag"></div></div>
@@ -53,16 +62,12 @@
     <div class="car-desc" id="car-desc"></div>
     <div class="stats" id="car-stats"></div>
     <div class="car-spec" id="car-spec"></div>
-    <div class="swatches" id="car-colors"></div>
-    <div class="row">
-      <button class="btn" data-go="main">← Меню</button>
-      <button class="btn accent" data-go="setup">Выбрать ✓</button>
-    </div>
   </div>
 
   <!-- ===== Рекорды ===== -->
   <div id="menu-records" class="screen panel-left">
     <h2>Рекорды</h2>
+    <div class="rec-filters" id="rec-filters"></div>
     <div id="records-table"></div>
     <div class="row"><button class="btn" data-go="main">← Меню</button><button class="btn small" id="btn-reset-rec">Сбросить</button></div>
   </div>
@@ -93,6 +98,7 @@
       <select id="set-fps"><option value="30">30</option><option value="60">60</option><option value="120">120</option><option value="144">144</option><option value="165">165</option><option value="240">240</option><option value="0">Без ограничений (частота монитора)</option></select>
     </label>
     <label class="opt">Показывать FPS <input type="checkbox" id="set-showfps" /></label>
+    <label class="opt">Авто-разрешение (держать FPS) <input type="checkbox" id="set-autores" /></label>
     <label class="opt">Спидометр <select id="set-units"><option value="kmh">км/ч</option><option value="mph">mph</option></select></label>
     <div class="row"><button class="btn" data-go="main">← Меню</button></div>
   </div>
@@ -120,9 +126,21 @@
   <!-- ===== Онлайн: подключение ===== -->
   <div id="menu-online" class="screen panel-right">
     <h2>Онлайн</h2>
-    <p class="hint">Гоняй с друзьями по одной и той же трассе. До 8 игроков в комнате. Машины других игроков — «призраки» (сквозь них можно проезжать).</p>
     <label class="opt">Твоё имя <input type="text" id="on-name" maxlength="16" placeholder="Игрок" /></label>
-    <button class="btn big accent" id="on-quick">⚡ Быстрая игра</button>
+    <div class="mm-box">
+      <b>⚡ Быстрый матч — подбор игроков</b>
+      <div class="car-switch small">
+        <button class="btn arrow" id="mm-prev">◀</button>
+        <div><div class="car-tag">твоя машина</div><div class="lobby-car" id="mm-car"></div></div>
+        <button class="btn arrow" id="mm-next">▶</button>
+      </div>
+      <div class="opt">Режим <div class="seg" id="mm-mode"></div></div>
+      <label class="opt">Длина трассы <select id="mm-len"></select></label>
+      <div class="opt">Игроков <div class="seg" id="mm-size"></div></div>
+      <div class="opt col">Соперники по машине <div class="seg" id="mm-car-rule"></div></div>
+      <button class="btn big accent" id="on-quick">🔍 Найти матч</button>
+    </div>
+    <p class="hint">Или играй с друзьями: создай комнату (до 10 игроков) и отправь им код. Машины других игроков — «призраки», сквозь них можно проезжать.</p>
     <button class="btn" id="on-create">➕ Создать комнату</button>
     <div class="join-row"><input type="text" id="on-code" maxlength="4" placeholder="КОД" /><button class="btn" id="on-join">Войти по коду</button></div>
     <div class="online-status" id="online-status"></div>
@@ -139,7 +157,7 @@
     <div class="hud-small" id="lobby-type"></div>
     <div class="lobby-count" id="lobby-count"></div>
     <div id="lobby-players"></div>
-    <div class="car-switch small">
+    <div class="car-switch small" id="lobby-carsw">
       <button class="btn arrow" id="lobby-prev">◀</button>
       <div><div class="car-tag">твоя машина</div><div class="lobby-car" id="lobby-car"></div></div>
       <button class="btn arrow" id="lobby-next">▶</button>
@@ -151,11 +169,13 @@
       <label class="opt" id="lc-fm-row">Полигон <select id="lc-fm"><option value="obst">С препятствиями</option><option value="clean">Чистое поле</option><option value="flat">Чистое и ровное</option></select></label>
     </div>
     <div id="lobby-guest"><div class="hud-small">Настройки хоста:</div><b id="lobby-conf-text"></b></div>
+    <div class="mm-search hidden" id="mm-search"></div>
     <div class="hint" id="lobby-wait"></div>
     <div id="lobby-results" class="results"></div>
     <div class="row">
       <button class="btn" id="lobby-leave">← Выйти</button>
       <button class="btn big accent" id="lobby-start">СТАРТ</button>
+      <button class="btn big accent hidden" id="mm-again">🔍 Искать снова</button>
     </div>
   </div>
 
@@ -221,6 +241,6 @@
   <div id="countdown"></div>
   <div id="fps" class="hidden"></div>
 
-  <script src="dist/game.js?v=1791278680001"></script>
+  <script src="dist/game.js?v=1791280768829"></script>
 </body>
 </html>

@@ -12,6 +12,13 @@ const G = 9.81;
 function clamp(x, a, b) { return x < a ? a : x > b ? b : x; }
 function sign(x) { return x < 0 ? -1 : x > 0 ? 1 : 0; }
 
+// те же формулы, что в carStats (cars.js): дрифт и управляемость 0..1
+export function gripFactor(c) {
+  const handling = Math.min(1, ((c.muFront + c.muRear) / 2 - 0.9) / 0.45 + (c.downforce ?? 0) * 0.2);
+  const drift = Math.min(1, Math.max(0.15, (c.drive === 'RWD' ? 0.55 : 0.25) + (c.muFront - c.muRear) * 2.2 + (c.torque / c.mass - 0.25) * 0.8));
+  return clamp((0.76 - drift) / 0.2 + (handling - 0.7) * 1.5, 0, 1);
+}
+
 export class Vehicle {
   constructor(spec) {
     this.spec = spec;
@@ -21,6 +28,9 @@ export class Vehicle {
     this.a = s.wheelbase * s.frontWeight;          // от ЦТ до передней оси
     this.b = s.wheelbase - this.a;                 // от ЦТ до задней оси
     this.I = s.mass * (s.inertiaK ?? 0.95) * this.a * this.b * 1.35; // момент инерции по рысканию
+    // «цепкость» 0..1: у машин с низким дрифтом (и высокой управляемостью) занос не должен начинаться сам —
+    // только ручником. У дрифт-машин (kaze, sakura, bulldog…) = 0, их поведение не меняется.
+    this.gripK = s.gripK ?? gripFactor(s);
     this.reset(0, 0, 0);
   }
 
@@ -136,7 +146,8 @@ export class Vehicle {
     // срывает задние колёса для входа в занос, как в дрифт-симуляторах
     const thrIn = input.throttle;
     if (thrIn < 0.2) this.liftT = (this.liftT || 0) + dt;
-    if ((this.thrPrev ?? 0) < 0.3 && thrIn > 0.8 && (this.liftT || 0) < 0.35 && (this.liftT || 0) > 0.02 && u > 6 && this.gear > 0) this.kickT = 0.28;
+    // у цепких машин «пинок» от случайного отпускания газа (частое на клавиатуре) не срабатывает
+    if (this.gripK < 0.5 && (this.thrPrev ?? 0) < 0.3 && thrIn > 0.8 && (this.liftT || 0) < 0.35 && (this.liftT || 0) > 0.02 && u > 6 && this.gear > 0) this.kickT = 0.28;
     if (thrIn >= 0.2) this.liftT = 0;
     this.thrPrev = thrIn;
     if (this.kickT > 0) this.kickT -= dt;
@@ -171,7 +182,9 @@ export class Vehicle {
     // лёгкий режим: на скорости машина цепче держит поворот (если не дрифтишь специально ручником/заносом)
     let hsGrip = 1;
     if (calm) hsGrip = 1 + 0.8 * clamp((spd - 15) / 30, 0, 1);
-    const FmaxF = muF * Fzf * lsF * hsGrip, FmaxR = muR * Fzr * lsR * hsGrip;
+    // цепкие машины без ручника: задняя ось держит лучше — не срывается сама от газа и руля
+    const gk = input.handbrake > 0.1 ? 0 : this.gripK;
+    const FmaxF = muF * Fzf * lsF * hsGrip, FmaxR = muR * Fzr * lsR * hsGrip * (1 + gk * (opts.real ? 0.22 : 0.12));
 
     // ---------- продольные силы ----------
     let FxF = 0, FxR = 0;
@@ -196,7 +209,8 @@ export class Vehicle {
     // трекшн-контроль на прямой: при старте и разгоне без руля колёса не буксуют впустую.
     // В повороте, с ручником, при «пинке» или в заносе — отключается, чтобы можно было дрифтить.
     const straight = (Math.abs(beta) < 0.1 && Math.abs(input.steer) < 0.3 && hb < 0.1 && !(this.kickT > 0)) ||
-      (calm && u > 15); // в лёгком режиме без намерения дрифтить газ не срывает задок
+      (calm && u > 15) || // в лёгком режиме без намерения дрифтить газ не срывает задок
+      (gk > 0.5 && hb < 0.1 && Math.abs(beta) < 0.25); // цепкие машины: трекшн-контроль и в повороте
     if (opts.tcs !== false && straight && driveF > 0) {
       FxR = Math.min(FxR, FmaxR * 0.97);
       FxF = Math.min(FxF, FmaxF * 0.97);

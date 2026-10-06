@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { Vehicle } from './vehicle.js';
-import { CARS, carStats } from './cars.js';
+import { CARS, carStats, carClass, CLASSES } from './cars.js';
 import { MAPS } from './maps.js';
 import { Track, SP, CP_EVERY } from './track.js';
 import { Field } from './field.js';
-import { buildCarModel, animateCar } from './carmodel.js';
+import { buildCarModel, animateCar, setCarLod } from './carmodel.js';
 import { Rival } from './ai.js';
 import { GameAudio } from './audio.js';
 import { Input } from './input.js';
@@ -30,7 +30,7 @@ const MODES = [
 const FIELD_MODE = { id: 'field', name: 'Полигон', desc: '', timer: 0, rivals: 0, bonus: () => 0 };
 const STEP = 1 / 240; // физика 240 шагов/с — плавно даже на мониторах 144–240 Гц
 const CP_FIRST_IDX = 400;
-const BACK_WALL = 5; // м: стена позади игрока в Гонке и Дрифте
+const BACK_WALL = 5; // м: стена позади игрока (во всех режимах на трассе — назад ехать нельзя)
 
 // ======================= сохранения =======================
 const store = {
@@ -39,14 +39,21 @@ const store = {
 };
 const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 if (isTouch) document.body.classList.add('touch');
-const settings = Object.assign({ vol: 0.8, music: true, assist: true, manual: false, quality: isTouch ? 0 : 1, camera: 0, units: 'kmh', fps: 0, showFps: false, sfxVol: 0.8, musicVol: 0.3, easy: true, smoke: true, outline: true }, store.get('settings', {}));
+const settings = Object.assign({ vol: 0.8, music: true, assist: true, manual: false, quality: isTouch ? 0 : 1, camera: 0, units: 'kmh', fps: 0, showFps: false, sfxVol: 0.8, musicVol: 0.3, easy: true, smoke: true, outline: true, autoRes: true }, store.get('settings', {}));
 if (!settings.handling) settings.handling = settings.easy === false ? 'real' : 'easy';
 settings.easy = settings.handling === 'easy';
 // len — длина трассы в км (0 = бесконечная); fieldMode — полигон: obst (с препятствиями), clean (чистое поле), flat (чистое и ровное)
 const sel = Object.assign({ car: 0, colors: {}, mode: 0, map: 0, len: 10, fieldMode: 'obst' }, store.get('sel', {}));
+sel.mm = Object.assign({ mode: 'race', len: 10, size: 5, carRule: 'any' }, sel.mm || {}); // фильтры быстрого матча
 if (sel.car >= CARS.length) sel.car = 0;
 const LEN_MIN = 5, LEN_MAX = 50;
 let records = store.get('records', {});
+// рекорды по каждой машине: ключ «режим_карта[_км]|id машины». Старые общие рекорды переносим к их машине
+for (const k of Object.keys(records)) {
+  if (k.includes('|')) continue;
+  const r = records[k]; const c = CARS.find((x) => x.name === r.car);
+  if (c && !records[k + '|' + c.id]) records[k + '|' + c.id] = { ...r };
+}
 const saveSettings = () => store.set('settings', settings);
 const saveSel = () => store.set('sel', sel);
 
@@ -56,15 +63,36 @@ const canvas = $('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap; // PCF заметно дешевле PCFSoft, а в мультяшной графике разницы почти не видно
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 1600);
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
+// Динамическое разрешение: если FPS проседает, картинка рендерится чуть в меньшем разрешении (незаметно на ходу),
+// когда запас появляется — разрешение возвращается. Так игра держит плавность на слабых ноутбуках.
+const dynRes = { scale: 1, t: 0, frames: 0, good: 0 };
+const basePixelRatio = () => [1, Math.min(devicePixelRatio, 1.5), Math.min(devicePixelRatio, 2)][+settings.quality] || 1;
+function applyPixelRatio() {
+  const pr = Math.max(0.5, basePixelRatio() * (settings.autoRes ? dynRes.scale : 1));
+  if (Math.abs(renderer.getPixelRatio() - pr) < 0.01) return;
+  renderer.setPixelRatio(pr);
+  resize();
+}
+function updateDynRes(dt) {
+  if (!settings.autoRes || state !== 'race') { dynRes.t = 0; dynRes.frames = 0; return; }
+  dynRes.t += dt; dynRes.frames++;
+  if (dynRes.t < 1.5) return;
+  const fps = dynRes.frames / dynRes.t;
+  dynRes.t = 0; dynRes.frames = 0;
+  const target = settings.fps > 0 ? Math.min(settings.fps, 60) : 60;
+  if (fps < target * 0.82 && dynRes.scale > 0.6) { dynRes.scale = Math.max(0.6, dynRes.scale - 0.12); dynRes.good = 0; applyPixelRatio(); }
+  else if (fps > target * 0.95) { if (++dynRes.good >= 3 && dynRes.scale < 1) { dynRes.scale = Math.min(1, dynRes.scale + 0.08); dynRes.good = 0; applyPixelRatio(); } }
+  else dynRes.good = 0;
+}
 function applyQuality() {
   const q = +settings.quality;
-  renderer.setPixelRatio([1, Math.min(devicePixelRatio, 1.5), Math.min(devicePixelRatio, 2)][q]);
+  renderer.setPixelRatio(Math.max(0.5, basePixelRatio() * (settings.autoRes ? dynRes.scale : 1)));
   renderer.shadowMap.enabled = q > 0;
   if (W && W.sun) {
     W.sun.castShadow = q > 0;
@@ -223,12 +251,18 @@ function makeGhost(r, model) {
     o.material = cache.get(o.material);
   });
 }
+const LOD_FAR = 65, LOD_NEAR = 55; // м: дальше — упрощённая модель (с запасом, чтобы не мигало на границе)
 function setGhostOpacity(r, d) {
   const op = clamp((d - 4) / 14, 0.3, 1);
-  if (Math.abs(op - (r.op ?? 1)) < 0.02) return;
+  const model = r.model;
+  const far = model ? (model.far ? d > LOD_NEAR : d > LOD_FAR) : false;
+  const lodChanged = model && far !== model.far;
+  if (lodChanged) setCarLod(model, far);
+  if (Math.abs(op - (r.op ?? 1)) < 0.02 && !lodChanged) return;
   r.op = op;
-  for (const m of r.ghostMats) m.opacity = op * (m.userData.baseOp ?? 1);
-  for (const o of r.outlines) o.visible = op > 0.95;
+  // полностью видимая машина рисуется как обычная (непрозрачная) — это заметно дешевле для видеокарты
+  for (const m of r.ghostMats) { const o = op * (m.userData.baseOp ?? 1); m.opacity = o; m.transparent = o < 0.999; }
+  for (const o of r.outlines) o.visible = op > 0.95 && !(far && o.userData.outlineOf && o.userData.outlineOf.userData.detail);
 }
 
 // ======================= онлайн: машины других игроков =======================
@@ -397,12 +431,14 @@ function startRace(opts = {}) {
   $('hud-mode').textContent = `${G.online ? 'Онлайн · ' : ''}${G.mode.name} · ${W.map.name}${G.finite ? ` · ${G.lenKm} км` : ''}`;
   viewShift = { x: 0, y: 0 }; updateViewOffset();
   updateCamera(0.016, true);
+  // заранее компилируем шейдеры всех объектов сцены, чтобы не было подвисаний в первые секунды заезда
+  try { renderer.compile(scene, camera); } catch (e) { /* не критично */ }
 }
 
 // видимая стена позади игрока (Гонка и Дрифт). Видна только спереди — камере сзади машины не мешает
 let backWallTex = null;
 function makeBackWall() {
-  if (W.track.isField || !(G.mode.id === 'race' || G.mode.id === 'drift')) return;
+  if (W.track.isField) return;
   if (!backWallTex) {
     const c = document.createElement('canvas'); c.width = 512; c.height = 128;
     const g = c.getContext('2d');
@@ -467,11 +503,13 @@ function physicsStep(inp) {
   veh.idx = pr.idx; veh.lat = pr.lat; veh.roadY = pr.y; veh.slope = pr.slope;
   veh.offroad = Math.abs(pr.lat) > track.hw + 0.3 && Math.abs(pr.k) < 1 / 170;
   veh.trackH = pr.h;
-  // «стена позади»: в Гонке и Дрифте стена едет в 5 м позади самой дальней точки, до которой доехал игрок, —
-  // назад ехать нельзя. В Свободной езде — не дальше 300 м (позади трасса удаляется), и никогда — за линию старта
+  // «стена позади»: во всех режимах на трассе (Гонка, Дрифт, Свободная езда) стена едет в 5 м позади
+  // самой дальней точки, до которой доехал игрок, — назад ехать нельзя.
+  // Онлайн: у каждого игрока стена своя (считается на его компьютере по его же машине) — лидер никого не «тянет»,
+  // отставшие едут как обычно, а чужие машины-призраки сквозь стены проезжают.
   if (G) {
     if (state === 'race') G.maxIdx = Math.max(G.maxIdx, veh.idx);
-    const back = G.mode.id === 'free' ? 150 : BACK_WALL / SP;
+    const back = BACK_WALL / SP;
     const limit = Math.max(track.base + 4, 3, G.maxIdx - back);
     if (veh.idx < limit) {
       const imp = veh.collideWall(Math.sin(pr.h), Math.cos(pr.h), (limit - veh.idx) * SP, 0.05);
@@ -731,7 +769,13 @@ function finishRace(finished = false) {
   const old = records[key];
   const timeRec = byTime(G.mode.id, G.lenKm);
   const isRec = !G.online && (timeRec ? finished && (!old || !old.time || G.elapsed < old.time) : G.score > 0 && (!old || G.score > old.score));
-  if (isRec) { records[key] = { score: G.score, time: finished ? G.elapsed : 0, dist: Math.floor(G.dist), drift: G.bestDrift, car: CARS[sel.car].name, date: new Date().toLocaleDateString('ru-RU') }; store.set('records', records); }
+  const entry = { score: G.score, time: finished ? G.elapsed : 0, dist: Math.floor(G.dist), drift: G.bestDrift, car: CARS[sel.car].name, date: new Date().toLocaleDateString('ru-RU'), ts: Date.now(), maxSpeed: Math.round(G.maxSpeed) };
+  if (isRec) records[key] = entry;
+  // личный рекорд этой машины на этой карте/режиме/длине
+  const carKey = key + '|' + CARS[sel.car].id, oldCar = records[carKey];
+  const isCarRec = !G.online && (timeRec ? finished && (!oldCar || !oldCar.time || G.elapsed < oldCar.time) : G.score > 0 && (!oldCar || G.score > oldCar.score));
+  if (isCarRec) records[carKey] = entry;
+  if (isRec || isCarRec) store.set('records', records);
   let title = G.mode.timer && !G.finite ? 'Время вышло!' : 'Заезд окончен';
   if (finished) title = G.place ? `ФИНИШ! ${G.place} место` : 'ФИНИШ!';
   $('over-title').textContent = title;
@@ -930,7 +974,8 @@ function showScreen(name) {
     updateViewOffset(); camera.updateProjectionMatrix();
   }
   if (name === 'setup') renderSetup();
-  if (name === 'garage') renderGarage();
+  $('garage-info').classList.toggle('hidden', name !== 'garage');
+  if (name === 'garage') { renderGarageGrid(); renderGarage(); }
   if (name === 'records') renderRecords();
   if (name === 'settings') renderSettings();
   if (name === 'online') renderOnline();
@@ -1002,41 +1047,155 @@ function renderSetupOpts(fieldSel) {
 }
 $('btn-start').addEventListener('click', () => { audio.click(); startRace(); });
 
+// ---------- гараж: сетка машин с картинками (модели рендерятся в маленькие превью один раз) ----------
+const thumbs = {}; // `${id}:${color}` -> dataURL
+let thumbR = null, thumbScene = null, thumbCam = null, thumbQueue = [], thumbBusy = false, thumbIdle = 0;
+function thumbKey(spec) { return `${spec.id}:${sel.colors[spec.id] ?? 0}`; }
+function renderThumb(spec) {
+  if (!thumbR) {
+    const cv = document.createElement('canvas'); cv.width = 320; cv.height = 180;
+    thumbR = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true, preserveDrawingBuffer: true });
+    thumbR.outputColorSpace = THREE.SRGBColorSpace; thumbR.toneMapping = THREE.ACESFilmicToneMapping;
+    thumbR.setPixelRatio(1); thumbR.setSize(320, 180, false); thumbR.setClearColor(0x000000, 0);
+    thumbScene = new THREE.Scene();
+    const pm = new THREE.PMREMGenerator(thumbR);
+    thumbScene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture; pm.dispose();
+    thumbScene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.6));
+    const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(-4, 8, 6); thumbScene.add(sun);
+    thumbCam = new THREE.PerspectiveCamera(26, 16 / 9, 0.1, 100);
+  }
+  const model = buildCarModel(spec, carColor(spec), { outline: settings.outline });
+  thumbScene.add(model.root);
+  const box = new THREE.Box3().setFromObject(model.root);
+  const size = box.getSize(new THREE.Vector3()), ctr = box.getCenter(new THREE.Vector3());
+  const dist = Math.max(size.z * 0.95, size.x * 1.6, size.y * 2.2) / Math.tan(THREE.MathUtils.degToRad(13)) * 0.36;
+  const dir = new THREE.Vector3(-0.62, 0.36, 0.7).normalize();
+  thumbCam.position.copy(ctr).addScaledVector(dir, dist);
+  thumbCam.lookAt(ctr.x, ctr.y - size.y * 0.05, ctr.z);
+  thumbR.render(thumbScene, thumbCam);
+  const url = thumbR.domElement.toDataURL('image/png');
+  thumbScene.remove(model.root);
+  model.root.traverse((o) => { if (o.geometry && !o.userData.sharedGeo) o.geometry.dispose(); });
+  return url;
+}
+// превью строятся по одному за кадр, чтобы меню не подвисало
+function pumpThumbs() {
+  if (thumbBusy) return;
+  thumbBusy = true;
+  const step = () => {
+    const spec = thumbQueue.shift();
+    if (!spec) {
+      thumbBusy = false;
+      // контекст превью больше не нужен — освобождаем видеопамять через пару секунд простоя
+      clearTimeout(thumbIdle);
+      thumbIdle = setTimeout(() => { if (!thumbQueue.length && thumbR) { thumbR.dispose(); thumbR.forceContextLoss(); thumbR = null; } }, 3000);
+      return;
+    }
+    const k = thumbKey(spec);
+    if (!thumbs[k]) {
+      try { thumbs[k] = renderThumb(spec); } catch (e) { thumbs[k] = ''; }
+      const img = document.querySelector(`.car-card[data-car="${CARS.indexOf(spec)}"] img`);
+      if (img && thumbs[k]) img.src = thumbs[k];
+    }
+    setTimeout(step, 0);
+  };
+  step();
+}
+function renderGarageGrid() {
+  $('garage-count').textContent = `${CARS.length} машин`;
+  // в сетке машины идут от самой медленной к самой быстрой
+  const order = CARS.map((c, i) => i).sort((a, b) => (CARS[a].vmax || 0) - (CARS[b].vmax || 0));
+  $('car-grid').innerHTML = order.map((i) => {
+    const c = CARS[i], t = thumbs[thumbKey(c)];
+    return `<div class="car-card ${i === sel.car ? 'sel' : ''}" data-car="${i}"><img class="thumb" alt="" ${t ? `src="${t}"` : ''}/><b>${c.name}</b></div>`;
+  }).join('');
+  document.querySelectorAll('.car-card').forEach((el) => el.addEventListener('click', () => selectCar(+el.dataset.car)));
+  const missing = CARS.filter((c) => !thumbs[thumbKey(c)]);
+  // сначала выбранная и соседние
+  missing.sort((a, b) => Math.abs(CARS.indexOf(a) - sel.car) - Math.abs(CARS.indexOf(b) - sel.car));
+  thumbQueue = missing; pumpThumbs();
+  const cur = document.querySelector('.car-card.sel'); if (cur) cur.scrollIntoView({ block: 'nearest' });
+}
 function renderGarage() {
   const c = CARS[sel.car];
-  $('car-name').textContent = c.name; $('car-tag').textContent = c.tag; $('car-desc').textContent = c.desc;
+  $('car-name').textContent = c.name;
+  $('car-tag').innerHTML = `${escapeHtml(c.tag)}<span class="cls cls-${carClass(c)}">${carClass(c)}</span>`;
+  $('car-desc').textContent = c.desc;
   const st = carStats(c);
   $('car-stats').innerHTML = [['Скорость', st.top], ['Разгон', st.accel], ['Управляемость', st.handling], ['Дрифт', st.drift]]
     .map(([n, v]) => `<div class="stat"><span>${n}</span><div class="bar"><i style="width:${Math.round(v * 100)}%"></i></div></div>`).join('');
-  $('car-spec').textContent = `${c.hp} л.с. · ${c.torque} Н·м · ${c.mass} кг · привод ${c.drive === 'RWD' ? 'задний' : c.drive === 'AWD' ? 'полный' : 'передний'} · ${c.gears.length} передач`;
+  $('car-spec').textContent = `${c.hp} л.с. · ${c.torque} Н·м · ${c.mass} кг · до ${speedStr(c.vmax || 250)} · привод ${c.drive === 'RWD' ? 'задний' : c.drive === 'AWD' ? 'полный' : 'передний'} · ${c.gears.length} ${c.gears.length < 5 ? 'передачи' : 'передач'}`;
   const ci = sel.colors[c.id] ?? 0;
   $('car-colors').innerHTML = c.colors.map((col, i) => `<div class="swatch ${i === ci ? 'sel' : ''}" style="background:${col}" data-col="${i}"></div>`).join('');
   document.querySelectorAll('[data-col]').forEach((el) => el.addEventListener('click', () => {
     sel.colors[c.id] = +el.dataset.col; saveSel(); audio.click();
-    W.player.model.bodyMat.color.set(c.colors[+el.dataset.col]); renderGarage();
+    W.player.model.bodyMat.color.set(c.colors[+el.dataset.col]); renderGarage(); renderGarageGrid();
   }));
+  document.querySelectorAll('.car-card').forEach((el) => el.classList.toggle('sel', +el.dataset.car === sel.car));
 }
-function switchCar(d) {
-  sel.car = (sel.car + d + CARS.length) % CARS.length; saveSel(); audio.click();
-  const { veh } = W.player;
-  const p = W.track.P(6);
+function selectCar(i) {
+  if (i === sel.car) return;
+  sel.car = (i + CARS.length) % CARS.length; saveSel(); audio.click();
   spawnPlayer(6, -2.8);
   renderGarage();
+  const cur = document.querySelector('.car-card.sel'); if (cur) cur.scrollIntoView({ block: 'nearest' });
 }
+function switchCar(d) { selectCar((sel.car + d + CARS.length) % CARS.length); }
 $('car-prev').addEventListener('click', () => switchCar(-1));
 $('car-next').addEventListener('click', () => switchCar(1));
 
-function renderRecords() {
-  let html = '<table><tr><th>Режим</th><th>Карта</th><th>Длина</th><th>Рекорд</th><th>Машина</th></tr>';
-  let any = false;
-  for (const m of [...MODES, FIELD_MODE]) for (const mp of MAPS) for (let len = 0; len <= LEN_MAX; len++) {
-    const r = records[recKey(m.id, mp.id, len)];
-    if (!r) continue; any = true;
-    const val = byTime(m.id, len) ? (r.time ? fmtTime(r.time) : '—') : r.score.toLocaleString('ru-RU');
-    html += `<tr><td>${m.name}</td><td>${mp.name}</td><td>${mp.field ? '—' : len ? len + ' км' : '∞'}</td><td><b>${val}</b></td><td>${r.car}</td></tr>`;
+// ---------- рекорды: фильтры по карте, режиму, машине и длине + группировка и сортировка ----------
+const recView = { map: 'all', mode: 'all', car: 'all', len: 'all', group: 'map', sort: 'best' };
+function allRecordEntries() {
+  const out = [];
+  for (const m of [...MODES, FIELD_MODE]) for (const mp of MAPS) {
+    if (!!mp.field !== (m.id === 'field')) continue;
+    for (let len = 0; len <= LEN_MAX; len++) for (const c of CARS) {
+      const r = records[recKey(m.id, mp.id, len) + '|' + c.id];
+      if (r) out.push({ r, mode: m, map: mp, len, car: c, timeRec: byTime(m.id, len) });
+    }
   }
-  html += '</table>';
-  $('records-table').innerHTML = any ? html : '<p class="hint">Рекордов пока нет — самое время поставить первый!</p>';
+  return out;
+}
+function renderRecords() {
+  const all = allRecordEntries();
+  const opt = (v, t, cur) => `<option value="${v}" ${String(v) === String(cur) ? 'selected' : ''}>${t}</option>`;
+  const usedCars = CARS.filter((c) => all.some((e) => e.car === c));
+  const usedLens = [...new Set(all.map((e) => e.len))].sort((a, b) => a - b);
+  $('rec-filters').innerHTML = `
+    <label>Карта<select data-rf="map">${opt('all', 'Все карты', recView.map)}${MAPS.map((m) => opt(m.id, m.name, recView.map)).join('')}</select></label>
+    <label>Режим<select data-rf="mode">${opt('all', 'Все режимы', recView.mode)}${[...MODES, FIELD_MODE].map((m) => opt(m.id, m.name, recView.mode)).join('')}</select></label>
+    <label>Машина<select data-rf="car">${opt('all', 'Все машины', recView.car)}${usedCars.map((c) => opt(c.id, c.name, recView.car)).join('')}</select></label>
+    <label>Длина<select data-rf="len">${opt('all', 'Любая', recView.len)}${usedLens.map((l) => opt(l, l ? l + ' км' : '∞ / полигон', recView.len)).join('')}</select></label>
+    <label>Группировать<select data-rf="group">${opt('map', 'По картам', recView.group)}${opt('car', 'По машинам', recView.group)}${opt('mode', 'По режимам', recView.group)}</select></label>
+    <label>Сортировка<select data-rf="sort">${opt('best', 'Лучший результат', recView.sort)}${opt('date', 'Сначала новые', recView.sort)}${opt('speed', 'Макс. скорость', recView.sort)}${opt('dist', 'Дистанция', recView.sort)}</select></label>`;
+  document.querySelectorAll('[data-rf]').forEach((el) => el.addEventListener('change', () => { recView[el.dataset.rf] = el.value; renderRecords(); }));
+  const list = all.filter((e) => (recView.map === 'all' || e.map.id === recView.map) && (recView.mode === 'all' || e.mode.id === recView.mode) &&
+    (recView.car === 'all' || e.car.id === recView.car) && (recView.len === 'all' || e.len === +recView.len));
+  if (!all.length) { $('records-table').innerHTML = '<p class="hint">Рекордов пока нет — самое время поставить первый!</p>'; return; }
+  if (!list.length) { $('records-table').innerHTML = '<p class="hint">По этим фильтрам рекордов нет.</p>'; return; }
+  // группы: внутри группы — сначала по режиму и длине (сравнивать можно только одинаковые заезды), потом по выбранной сортировке
+  const gKey = (e) => recView.group === 'car' ? e.car.name : recView.group === 'mode' ? e.mode.name : e.map.name;
+  const cmp = (a, b) => {
+    if (recView.sort === 'date') return (b.r.ts || 0) - (a.r.ts || 0);
+    if (recView.sort === 'speed') return (b.r.maxSpeed || 0) - (a.r.maxSpeed || 0);
+    if (recView.sort === 'dist') return (b.r.dist || 0) - (a.r.dist || 0);
+    if (a.mode.id !== b.mode.id) return MODES.indexOf(a.mode) - MODES.indexOf(b.mode);
+    if (a.len !== b.len) return a.len - b.len;
+    return a.timeRec ? (a.r.time || 1e9) - (b.r.time || 1e9) : b.r.score - a.r.score;
+  };
+  const groups = new Map();
+  for (const e of list) { const k = gKey(e); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(e); }
+  let html = '<table><tr><th>Карта · режим</th><th>Длина</th><th>Машина</th><th>Результат</th><th>Дата</th></tr>';
+  for (const [g, items] of groups) {
+    html += `<tr><td colspan="5" class="rec-group">${escapeHtml(g)}</td></tr>`;
+    for (const e of items.sort(cmp)) {
+      const val = e.timeRec ? (e.r.time ? fmtTime(e.r.time) : '—') : `${e.r.score.toLocaleString('ru-RU')} очк.`;
+      const sub = [e.r.dist ? `${(e.r.dist / 1000).toFixed(1)} км` : '', e.r.maxSpeed ? speedStr(e.r.maxSpeed) : ''].filter(Boolean).join(' · ');
+      html += `<tr><td>${e.map.name}<small>${e.mode.name}</small></td><td>${e.map.field ? '—' : e.len ? e.len + ' км' : '∞'}</td><td>${e.car.name}<span class="cls cls-${carClass(e.car)}">${carClass(e.car)}</span></td><td><b>${val}</b>${sub ? `<small>${sub}</small>` : ''}</td><td><small>${e.r.date || ''}</small></td></tr>`;
+    }
+  }
+  $('records-table').innerHTML = html + '</table>';
 }
 $('btn-reset-rec').addEventListener('click', () => { if (confirm('Удалить все рекорды?')) { records = {}; store.set('records', records); renderRecords(); } });
 
@@ -1046,7 +1205,7 @@ function renderSettings() {
   $('set-sfx').value = settings.sfxVol; $('set-musicvol').value = settings.musicVol;
   $('set-outline').checked = settings.outline;
   $('set-handling').value = settings.handling; $('set-smoke').checked = settings.smoke;
-  $('set-fps').value = settings.fps; $('set-showfps').checked = settings.showFps;
+  $('set-fps').value = settings.fps; $('set-showfps').checked = settings.showFps; $('set-autores').checked = settings.autoRes;
 }
 $('set-vol').addEventListener('input', (e) => { settings.vol = +e.target.value; audio.setVolume(settings.vol); saveSettings(); });
 $('set-sfx').addEventListener('input', (e) => { settings.sfxVol = +e.target.value; audio.setSfxVol(settings.sfxVol); saveSettings(); });
@@ -1062,17 +1221,32 @@ $('set-camera').addEventListener('change', (e) => { settings.camera = +e.target.
 $('set-units').addEventListener('change', (e) => { settings.units = e.target.value; saveSettings(); });
 $('set-fps').addEventListener('change', (e) => { settings.fps = +e.target.value; saveSettings(); });
 $('set-showfps').addEventListener('change', (e) => { settings.showFps = e.target.checked; saveSettings(); });
+$('set-autores').addEventListener('change', (e) => { settings.autoRes = e.target.checked; saveSettings(); dynRes.scale = 1; applyPixelRatio(); });
 
 // ======================= онлайн: подключение и лобби =======================
 const serverUrl = () => (settings.server || '').trim() || (/^(localhost|127\.)/.test(location.hostname) ? 'ws://localhost:8080' : DEFAULT_SERVER);
 function setOnlineStatus(text, err) { const el = $('online-status'); el.textContent = text; el.classList.toggle('err', !!err); }
+const MM_LENS = [5, 10, 15, 20, 25, 30, 40, 50, 0];
 function renderOnline() {
+  const c = CARS[sel.car], cls = carClass(c);
+  $('mm-car').innerHTML = `${c.name}<span class="cls cls-${cls}">${cls}</span>`;
+  const seg = (id, items, key) => {
+    $(id).innerHTML = items.map(([v, t]) => `<button class="btn small ${sel.mm[key] === v ? 'on' : ''}" data-v="${v}">${t}</button>`).join('');
+    $(id).querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+      audio.click(); const v = b.dataset.v; sel.mm[key] = /^\d+$/.test(v) ? +v : v; saveSel(); renderOnline();
+    }));
+  };
+  seg('mm-mode', [['race', 'Гонка'], ['drift', 'Дрифт']], 'mode');
+  seg('mm-size', [[5, '5'], [10, '10']], 'size');
+  seg('mm-car-rule', [['any', 'Любые'], ['class', `Класс ${cls}`], ['same', 'Та же машина']], 'carRule');
+  if (!MM_LENS.includes(sel.mm.len)) sel.mm.len = 10;
+  $('mm-len').innerHTML = MM_LENS.map((l) => `<option value="${l}" ${l === sel.mm.len ? 'selected' : ''}>${l ? l + ' км' : '∞ бесконечная'}</option>`).join('');
   $('on-name').value = settings.name || '';
   $('on-server').value = settings.server || '';
   $('on-server').placeholder = serverUrl();
   setOnlineStatus(net.connected ? 'Подключено' : '');
 }
-function myProfile() { const spec = CARS[sel.car]; return { name: settings.name || 'Игрок', car: sel.car, color: sel.colors[spec.id] ?? 0 }; }
+function myProfile() { const spec = CARS[sel.car]; return { name: settings.name || 'Игрок', car: sel.car, cls: carClass(spec), color: sel.colors[spec.id] ?? 0 }; }
 async function goOnline(joinMsg) {
   audio.click();
   settings.name = $('on-name').value.trim().slice(0, 16); settings.server = $('on-server').value.trim(); saveSettings();
@@ -1084,7 +1258,13 @@ async function goOnline(joinMsg) {
   } catch (e) { setOnlineStatus(e.message, true); }
   document.querySelectorAll('#menu-online .btn').forEach((b) => (b.disabled = false));
 }
-$('on-quick').addEventListener('click', () => goOnline({ quick: true }));
+const mmJoin = () => ({ mm: { ...sel.mm, maps: MAPS.map((m, i) => (m.field ? -1 : i)).filter((i) => i >= 0) } });
+$('on-quick').addEventListener('click', () => goOnline(mmJoin()));
+$('mm-len').addEventListener('change', (e) => { sel.mm.len = +e.target.value; saveSel(); });
+function mmCar(d) { sel.car = (sel.car + d + CARS.length) % CARS.length; saveSel(); audio.click(); if (W && state === 'menu') spawnPlayer(6, -2.8); renderOnline(); }
+$('mm-prev').addEventListener('click', () => mmCar(-1));
+$('mm-next').addEventListener('click', () => mmCar(1));
+$('mm-again').addEventListener('click', () => { showScreen('online'); goOnline(mmJoin()); });
 $('on-create').addEventListener('click', () => goOnline({}));
 $('on-join').addEventListener('click', () => {
   const code = $('on-code').value.trim().toUpperCase();
@@ -1101,25 +1281,41 @@ function lobbyConfigText(c) {
 }
 function renderLobby() {
   if (!net.connected) { showScreen('online'); return; }
-  $('lobby-code').textContent = net.code;
-  $('lobby-type').textContent = net.isPublic ? 'Открытая комната (быстрая игра)' : 'Закрытая комната — отправь код друзьям';
+  const mm = net.mm;
+  $('lobby-code').textContent = mm ? '' : net.code;
+  $('menu-lobby').querySelector('h2').firstChild.textContent = mm ? 'Быстрый матч ' : 'Комната ';
+  $('lobby-type').textContent = mm
+    ? `${mm.mode === 'drift' ? 'Дрифт' : 'Гонка'} · ${mm.len ? mm.len + ' км' : 'бесконечная'} · ${mm.size} игроков · соперники: ${{ any: 'любые машины', class: 'класс ' + carClass(CARS[sel.car]), same: CARS[sel.car].name }[mm.carRule]}`
+    : 'Закрытая комната — отправь код друзьям';
   const me = myProfile();
   const list = [{ id: net.id, ...me, me: true }, ...[...net.players.values()]];
   $('lobby-players').innerHTML = list.map((p) => {
     const spec = CARS[p.car] || CARS[0];
     const col = spec.colors[p.color % spec.colors.length];
-    return `<div class="lp"><i style="background:${col}"></i><b>${p.id === net.host ? '👑 ' : ''}${escapeHtml(p.name)}${p.me ? ' (ты)' : ''}</b><span>${spec.name}${p.inRace ? ' · в заезде' : ''}</span></div>`;
+    return `<div class="lp"><i style="background:${col}"></i><b>${p.id === net.host && !net.mm ? '👑 ' : ''}${escapeHtml(p.name)}${p.me ? ' (ты)' : ''}</b><span>${spec.name}${p.inRace ? ' · в заезде' : ''}</span></div>`;
   }).join('');
-  $('lobby-count').textContent = `Игроки: ${list.length} / 8`;
+  $('lobby-count').textContent = `Игроки: ${list.length} / ${mm ? mm.size : 10}`;
   $('lobby-car').textContent = CARS[sel.car].name;
   const c = net.config;
-  const host = net.isHost;
+  const host = net.isHost && !mm;
   $('lobby-host').classList.toggle('hidden', !host);
-  $('lobby-guest').classList.toggle('hidden', host);
+  $('lobby-guest').classList.toggle('hidden', host || !!mm);
   $('lobby-start').classList.toggle('hidden', !host);
+  $('lobby-carsw').classList.toggle('hidden', !!mm);
+  const done = net.state === 'done';
+  $('mm-again').classList.toggle('hidden', !(mm && done));
+  $('lobby-leave').textContent = mm && !done ? '✕ Отмена' : '← Выйти';
+  const ms = net.mmStatus;
+  $('mm-search').classList.toggle('hidden', !mm);
+  if (mm) {
+    $('mm-search').innerHTML = done ? '<div class="hud-small">Матч завершён</div>'
+      : ms && ms.state === 'countdown' ? `<div class="hud-small">Все в сборе! Старт через</div><div class="mm-cd">${ms.left}</div>`
+      : net.state === 'racing' ? '<div class="hud-small">Идёт заезд…</div>'
+      : `<div class="hud-small">Ищем соперников…</div><div class="mm-count">${ms ? ms.count : list.length} / ${mm.size}</div><div class="hud-small" id="mm-wait-t"></div>`;
+  }
   $('lobby-conf-text').textContent = lobbyConfigText(c);
   const racing = net.state === 'racing';
-  $('lobby-wait').textContent = racing ? 'Сейчас идёт заезд — подожди, пока он закончится.' : host ? (list.length < 2 ? 'Можно стартовать одному или подождать друзей.' : '') : 'Ждём, когда хост нажмёт «Старт».';
+  $('lobby-wait').textContent = mm ? (done ? 'Нажми «Искать снова», чтобы найти новый матч с теми же настройками.' : 'Матч начнётся сам, как только наберётся нужное число игроков с подходящими машинами.') : racing ? 'Сейчас идёт заезд — подожди, пока он закончится.' : host ? (list.length < 2 ? 'Можно стартовать одному или подождать друзей.' : '') : 'Ждём, когда хост нажмёт «Старт».';
   if (host) {
     $('lc-map').innerHTML = MAPS.map((m, i) => `<option value="${i}" ${i === c.map ? 'selected' : ''}>${m.name}</option>`).join('');
     const field = !!(MAPS[c.map] || {}).field;
@@ -1170,11 +1366,16 @@ function renderOnlineResults() {
   lb.innerHTML = html ? `<h3>Последний заезд</h3>${html}` : '';
 }
 
-net.on.joined = () => { if (menuScreen === 'lobby') renderLobby(); };
+net.on.joined = () => { net.mmSince = Date.now(); if (menuScreen === 'lobby') renderLobby(); };
 net.on.player = () => { if (menuScreen === 'lobby') renderLobby(); };
 net.on.config = () => { if (menuScreen === 'lobby') renderLobby(); };
 net.on.left = (p) => { removeRemoteCar(p); if (menuScreen === 'lobby') renderLobby(); };
 net.on.fin = () => { renderOnlineResults(); };
+setInterval(() => {
+  const el = document.getElementById('mm-wait-t');
+  if (el && net.mmSince) { const t = Math.floor((Date.now() - net.mmSince) / 1000); el.textContent = `ожидание ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; }
+}, 1000);
+net.on.mm = (m) => { if (m.state === 'countdown') audio.countdown(false); if (menuScreen === 'lobby') renderLobby(); };
 net.on.lobby = () => { renderOnlineResults(); if (menuScreen === 'lobby') renderLobby(); };
 net.on.error = (t) => { if (menuScreen === 'online') setOnlineStatus(t, true); else showMsg(t, 2.5, '#ff6b6b'); };
 net.on.close = () => {
@@ -1256,6 +1457,7 @@ function frame(now) {
     G._events = evs;
     updateRace(dt);
   }
+  updateDynRes(dt);
   if (composer) composer.render(); else renderer.render(scene, camera);
 }
 
@@ -1267,5 +1469,5 @@ showScreen('main');
 requestAnimationFrame(frame);
 
 // для отладки/тестов
-window.__game = { renderer, get W() { return W; }, get G() { return G; }, get state() { return state; }, startRace, showScreen, sel, settings, cam, net, CARS,
+window.__game = { renderer, get W() { return W; }, get G() { return G; }, get state() { return state; }, startRace, showScreen, sel, settings, cam, net, CARS, camera, scene,
   tick(dt, n = 1) { for (let i = 0; i < n; i++) { if (state === "countdown" || state === "race" || state === "over") { G._events = []; updateRace(dt); } } } };

@@ -8,7 +8,8 @@ const INTERP_DELAY = 120; // мс
 const SEND_HZ = 15;
 
 export const net = {
-  ws: null, id: 0, code: '', host: 0, isPublic: false, state: 'off', // off | connecting | lobby | racing
+  ws: null, id: 0, code: '', host: 0, isPublic: false, state: 'off', // off | connecting | lobby | racing | done
+  mm: null, mmStatus: null, // быстрый матч: требования комнаты и статус подбора { count, size, state: search|countdown, left }
   config: null, players: new Map(), // id -> { id, name, car, color, inRace, buf: [], vis, model, fin }
   results: [], racers: [],
   on: {}, // обработчики: joined, player, left, config, start, fin, lobby, error, close
@@ -43,6 +44,7 @@ export const net = {
   },
 
   disconnect(silent) {
+    this.mm = null; this.mmStatus = null;
     if (this.ws) { const ws = this.ws; this.ws = null; this.state = 'off'; try { ws.close(); } catch { /* уже закрыт */ } }
     this.players.clear();
     if (!silent) this.emit('close');
@@ -63,6 +65,7 @@ export const net = {
     switch (m.t) {
       case 'joined':
         this.id = m.id; this.code = m.code; this.host = m.host; this.config = m.config; this.isPublic = m.isPublic;
+        this.mm = m.mm || null; this.mmStatus = m.mm ? { count: m.players.length, size: m.mm.size, state: 'search', left: 0 } : null; this.results = [];
         this.state = 'lobby'; this.players.clear();
         for (const p of m.players) if (p.id !== this.id) this.addPlayer(p);
         this.emit('joined', m);
@@ -94,7 +97,8 @@ export const net = {
         this.emit('fin', m.r);
         break;
       }
-      case 'lobby': this.state = 'lobby'; this.results = m.results || this.results; for (const p of this.players.values()) p.inRace = false; this.emit('lobby', m); break;
+      case 'mm': this.mmStatus = m; this.emit('mm', m); break;
+      case 'lobby': this.state = m.state === 'done' ? 'done' : 'lobby'; this.results = m.results || this.results; for (const p of this.players.values()) p.inRace = false; this.emit('lobby', m); break;
       case 'error': this.emit('error', m.text); break;
       default: break;
     }

@@ -47,6 +47,16 @@ const STYLE = {
   bars: { spokes: 6, rim: 0x2b2b2b, caliper: 0x555555, rimDepth: 0.06, plate: '01 KG 444 OR' },
   baron: { spokes: 7, rim: 0xb8bcc4, caliper: 0x1d3f8f, rimDepth: 0.04, plate: '01 KG 005 MB' },
   mamba: { spokes: 5, rim: 0x1c1c1f, caliper: 0xffba08, rimDepth: 0.04, plate: '01 KG 010 VR' },
+  kei: { spokes: 4, rim: 0xd9dadc, caliper: 0x444444, rimDepth: 0.03, plate: '01 KG 660 KC' },
+  zhiga: { spokes: 6, rim: 0xc9ccd2, caliper: 0x444444, rimDepth: 0.06, plate: '01 KG 107 AA', chromeBumpers: true },
+  taiga: { spokes: 5, rim: 0x5c5c5c, caliper: 0x444444, rimDepth: 0.05, plate: '01 KG 214 NV' },
+  rossa: { spokes: 7, rim: 0xd6d8dc, caliper: 0xd62828, rimDepth: 0.06, plate: '01 KG 124 SP', chromeBumpers: true },
+  rancho: { spokes: 6, rim: 0x2b2b2b, caliper: 0x555555, rimDepth: 0.07, plate: '01 KG 150 V8', chromeBumpers: true },
+  volt: { spokes: 10, rim: 0x8d99ae, caliper: 0x3a86ff, rimDepth: 0.02, plate: '01 KG 003 EV' },
+  gruppo: { spokes: 8, rim: 0xf1f1f1, caliper: 0xd62828, rimDepth: 0.04, plate: '01 KG 037 GB', cage: true },
+  kaiju: { spokes: 6, rim: 0x111114, caliper: 0xf72585, rimDepth: 0.08, plate: '01 KG 760 DR' },
+  proto: { spokes: 10, rim: 0x111114, caliper: 0xffd166, rimDepth: 0.02, plate: '01 KG 024 LM' },
+  zenith: { spokes: 10, rim: 0x1c1c1f, caliper: 0xfca311, rimDepth: 0.02, plate: '01 KG 016 W1' },
 };
 
 // ---------- утилиты ----------
@@ -247,7 +257,9 @@ function addOutline(mesh, thick) {
   if (thick) mat.uniforms.t.value = thick;
   const o = new THREE.Mesh(g, mat);
   o.position.copy(mesh.position); o.quaternion.copy(mesh.quaternion);
+  o.userData.outlineOf = mesh;
   mesh.parent.add(o);
+  return o;
 }
 
 // ---------- колесо ----------
@@ -632,7 +644,26 @@ export function buildCarModel(spec, color, opts = {}) {
   }
   root.add(chassis); root.add(shadow);
 
-  return { root, chassis, wheels, bodyMat, headMat, tailMat, spec };
+  // LOD для далёких машин: мелкие детали (решётки, номера, диски, суппорты, эмблемы…) прячем —
+  // вблизи их видно, а издалека это лишь десятки лишних вызовов отрисовки на каждую машину
+  const keep = new Set([bodyMat, M.glass, M.black, tailMat, headMat, M.tire]);
+  const detail = [];
+  group.children.forEach((m) => { if (m.isMesh && !keep.has(m.material) && !(m.userData.outlineOf && m.userData.outlineOf.material === bodyMat)) detail.push(m); });
+  for (const w of wheels) w.wheel.children.forEach((m) => { if (m.isMesh && m.material !== M.tire && !m.userData.outlineOf) detail.push(m); });
+  for (const w of wheels) w.pivot.children.forEach((m) => { if (m.isMesh) detail.push(m); });
+  for (const m of detail) m.userData.detail = true;
+  const casters = [];
+  root.traverse((m) => { if (m.isMesh && m.castShadow) casters.push(m); });
+
+  return { root, chassis, wheels, bodyMat, headMat, tailMat, spec, detail, casters, far: false };
+}
+
+// переключение детализации: far = true — упрощённая машина без мелких деталей и без отбрасывания тени
+export function setCarLod(model, far) {
+  if (model.far === far) return;
+  model.far = far;
+  for (const m of model.detail) m.visible = !far;
+  for (const m of model.casters) m.castShadow = !far;
 }
 
 // обновление анимации модели по состоянию физики
