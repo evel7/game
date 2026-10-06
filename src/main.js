@@ -207,7 +207,7 @@ function carColor(spec) { return spec.colors[sel.colors[spec.id] ?? 0]; }
 function spawnPlayer(idx, lat) {
   const spec = CARS[sel.car];
   if (W.player) { W.group.remove(W.player.model.root); }
-  const model = buildCarModel(spec, carColor(spec), { night: W.map.night, outline: settings.outline });
+  const model = buildCarModel(spec, carColor(spec), { night: W.map.night, outline: true });
   model._tailBase = W.map.night ? 1.2 : 0.35;
     W.group.add(model.root);
   const veh = new Vehicle(spec);
@@ -283,7 +283,7 @@ function nameSprite(text) {
 function spawnRemoteCar(p) {
   if (p.model || !W) return;
   const spec = CARS[p.car] || CARS[0];
-  const model = buildCarModel(spec, spec.colors[p.color % spec.colors.length], { night: W.map.night, outline: settings.outline });
+  const model = buildCarModel(spec, spec.colors[p.color % spec.colors.length], { night: W.map.night, outline: true });
   model._tailBase = W.map.night ? 1.2 : 0.35;
   makeGhost(p, model);
   p.label = nameSprite(p.name);
@@ -321,7 +321,7 @@ function spawnRivals(n) {
   for (let i = 0; i < n; i++) {
     const spec = CARS[(sel.car + 1 + i) % CARS.length];
     const color = spec.colors[(i * 2 + 1) % spec.colors.length];
-    const model = buildCarModel(spec, color, { night: W.map.night, outline: settings.outline });
+    const model = buildCarModel(spec, color, { night: W.map.night, outline: true });
     model._tailBase = W.map.night ? 1.2 : 0.35;
     W.group.add(model.root);
     const r = new Rival(spec, model, grid[i][0], grid[i][1], 0.97 + Math.random() * 0.1, W.map.grip);
@@ -1081,7 +1081,7 @@ function renderThumb(spec) {
     const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(-4, 8, 6); thumbScene.add(sun);
     thumbCam = new THREE.PerspectiveCamera(26, 16 / 9, 0.1, 100);
   }
-  const model = buildCarModel(spec, carColor(spec), { outline: settings.outline });
+  const model = buildCarModel(spec, carColor(spec), { outline: true });
   thumbScene.add(model.root);
   const box = new THREE.Box3().setFromObject(model.root);
   const size = box.getSize(new THREE.Vector3()), ctr = box.getCenter(new THREE.Vector3());
@@ -1220,14 +1220,12 @@ function renderSettings() {
   $('set-vol').value = settings.vol; $('set-music').checked = settings.music; $('set-assist').value = settings.assistMode; $('set-draw').value = settings.draw;
   $('set-manual').checked = settings.manual; $('set-quality').value = settings.quality; $('set-camera').value = settings.camera; $('set-units').value = settings.units;
   $('set-sfx').value = settings.sfxVol; $('set-musicvol').value = settings.musicVol;
-  $('set-outline').checked = settings.outline;
   $('set-handling').value = settings.handling; $('set-smoke').checked = settings.smoke;
   $('set-fps').value = settings.fps; $('set-showfps').checked = settings.showFps; $('set-autores').checked = settings.autoRes;
 }
 $('set-vol').addEventListener('input', (e) => { settings.vol = +e.target.value; audio.setVolume(settings.vol); saveSettings(); });
 $('set-sfx').addEventListener('input', (e) => { settings.sfxVol = +e.target.value; audio.setSfxVol(settings.sfxVol); saveSettings(); });
 $('set-musicvol').addEventListener('input', (e) => { settings.musicVol = +e.target.value; audio.setMusicVol(settings.musicVol); saveSettings(); });
-$('set-outline').addEventListener('change', (e) => { settings.outline = e.target.checked; saveSettings(); if (state === 'menu') spawnPlayer(6, -2.8); });
 $('set-handling').addEventListener('change', (e) => { settings.handling = e.target.value; settings.easy = settings.handling === 'easy'; saveSettings(); });
 $('set-smoke').addEventListener('change', (e) => { settings.smoke = e.target.checked; saveSettings(); if (W) W.smoke.clear(); });
 $('set-music').addEventListener('change', (e) => { settings.music = e.target.checked; audio.setMusic(settings.music); saveSettings(); });
