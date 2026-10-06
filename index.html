@@ -147,7 +147,7 @@
     </div>
     <p class="hint">Или играй с друзьями: создай комнату (до 10 игроков) и отправь им код. Машины других игроков — «призраки», сквозь них можно проезжать.</p>
     <button class="btn" id="on-create">➕ Создать комнату</button>
-    <div class="join-row"><input type="text" id="on-code" maxlength="4" placeholder="КОД" /><button class="btn" id="on-join">Войти по коду</button></div>
+    <div class="join-row"><input type="text" id="on-code" maxlength="6" placeholder="КОД (6 символов)" /><button class="btn" id="on-join">Войти по коду</button></div>
     <div class="online-status" id="online-status"></div>
     <details class="srv"><summary>Адрес сервера</summary>
       <input type="text" id="on-server" placeholder="wss://…" />
@@ -170,10 +170,12 @@
     <div id="lobby-host">
       <label class="opt">Карта <select id="lc-map"></select></label>
       <label class="opt" id="lc-mode-row">Режим <select id="lc-mode"></select></label>
+      <label class="opt">Машины <select id="lc-car"></select></label>
       <label class="opt" id="lc-len-row">Длина трассы <select id="lc-len"></select></label>
       <label class="opt" id="lc-fm-row">Полигон <select id="lc-fm"><option value="obst">С препятствиями</option><option value="clean">Чистое поле</option><option value="flat">Чистое и ровное</option></select></label>
     </div>
     <div id="lobby-guest"><div class="hud-small">Настройки хоста:</div><b id="lobby-conf-text"></b></div>
+    <div class="carreq hidden" id="lobby-carreq"><div id="carreq-text"></div><div class="row"><button class="btn accent" id="carreq-ok">Сменить машину</button><button class="btn" id="carreq-leave">Выйти из комнаты</button></div></div>
     <div class="mm-search hidden" id="mm-search"></div>
     <div class="hint" id="lobby-wait"></div>
     <div id="lobby-results" class="results"></div>
@@ -248,6 +250,6 @@
   <div id="countdown"></div>
   <div id="fps" class="hidden"></div>
 
-  <script src="dist/game.js?v=1791283892204"></script>
+  <script src="dist/game.js?v=1791284640047"></script>
 </body>
 </html>

@@ -1294,7 +1294,7 @@ $('mm-again').addEventListener('click', () => { showScreen('online'); goOnline(m
 $('on-create').addEventListener('click', () => goOnline({}));
 $('on-join').addEventListener('click', () => {
   const code = $('on-code').value.trim().toUpperCase();
-  if (code.length !== 4) { setOnlineStatus('Введи код комнаты из 4 символов', true); return; }
+  if (code.length !== 6) { setOnlineStatus('Введи код комнаты из 6 символов', true); return; }
   goOnline({ code });
 });
 $('on-back').addEventListener('click', () => { audio.click(); net.disconnect(true); showScreen('main'); });
@@ -1303,7 +1303,7 @@ function lobbyConfigText(c) {
   const map = MAPS[c.map] || MAPS[0];
   const mode = map.field ? 'Полигон' : (MODES.find((m) => m.id === c.mode) || MODES[0]).name;
   const extra = map.field ? { obst: 'с препятствиями', clean: 'чистое поле', flat: 'чистое и ровное' }[c.fieldMode] : c.len ? `${c.len} км` : 'бесконечная';
-  return `${mode} · ${map.name} · ${extra}`;
+  return `${mode} · ${map.name} · ${extra} · ${c.car >= 0 && CARS[c.car] ? 'только ' + CARS[c.car].name : 'любые машины'}`;
 }
 function renderLobby() {
   if (!net.connected) { showScreen('online'); return; }
@@ -1320,7 +1320,8 @@ function renderLobby() {
   $('lobby-players').innerHTML = list.map((p) => {
     const spec = CARS[p.car] || CARS[0];
     const col = spec.colors[p.color % spec.colors.length];
-    return `<div class="lp"><i style="background:${col}"></i><b>${p.id === net.host && !net.mm ? '👑 ' : ''}${escapeHtml(p.name)}${p.me ? ' (ты)' : ''}</b><span>${spec.name}${p.inRace ? ' · в заезде' : ''}</span></div>`;
+    const bad = !mm && net.config && net.config.car >= 0 && (p.me ? sel.car : p.car) !== net.config.car;
+    return `<div class="lp"><i style="background:${col}"></i><b>${p.id === net.host && !net.mm ? '👑 ' : ''}${escapeHtml(p.name)}${p.me ? ' (ты)' : ''}</b><span>${spec.name}${bad ? ' · ⚠ не та машина' : ''}${p.inRace ? ' · в заезде' : ''}</span></div>`;
   }).join('');
   $('lobby-count').textContent = `Игроки: ${list.length} / ${mm ? mm.size : 10}`;
   $('lobby-car').textContent = CARS[sel.car].name;
@@ -1329,7 +1330,12 @@ function renderLobby() {
   $('lobby-host').classList.toggle('hidden', !host);
   $('lobby-guest').classList.toggle('hidden', host || !!mm);
   $('lobby-start').classList.toggle('hidden', !host);
-  $('lobby-carsw').classList.toggle('hidden', !!mm);
+  const lockCar = !mm && c && c.car >= 0 && !!CARS[c.car];
+  $('lobby-carsw').classList.toggle('hidden', !!mm || lockCar);
+  // хост выбрал определённую машину: участник принимает (меняет машину) или выходит
+  const needCar = lockCar && !host && sel.car !== c.car;
+  $('lobby-carreq').classList.toggle('hidden', !needCar);
+  if (needCar) $('carreq-text').innerHTML = `Хост разрешил только машину <b>${CARS[c.car].name}</b>. Смени машину или выйди из комнаты — с другой машиной в заезд не пустит.`;
   const done = net.state === 'done';
   $('mm-again').classList.toggle('hidden', !(mm && done));
   $('lobby-leave').textContent = mm && !done ? '✕ Отмена' : '← Выйти';
@@ -1343,7 +1349,7 @@ function renderLobby() {
   }
   $('lobby-conf-text').textContent = lobbyConfigText(c);
   const racing = net.state === 'racing';
-  $('lobby-wait').textContent = mm ? (done ? 'Нажми «Искать снова», чтобы найти новый матч с теми же настройками.' : 'Матч начнётся сам, как только наберётся нужное число игроков с подходящими машинами.') : racing ? 'Сейчас идёт заезд — подожди, пока он закончится.' : host ? (list.length < 2 ? 'Можно стартовать одному или подождать друзей.' : '') : 'Ждём, когда хост нажмёт «Старт».';
+  $('lobby-wait').textContent = mm ? (done ? 'Нажми «Искать снова», чтобы найти новый матч с теми же настройками.' : 'Матч начнётся сам, как только наберётся нужное число игроков с подходящими машинами.') : racing ? (host ? 'Кто-то ещё в прошлом заезде. Можно подождать или нажать «Старт» — начнётся новый заезд для всех.' : 'Сейчас идёт заезд — подожди, пока он закончится.') : host ? (list.length < 2 ? 'Можно стартовать одному или подождать друзей.' : '') : 'Ждём, когда хост нажмёт «Старт».';
   if (host) {
     $('lc-map').innerHTML = MAPS.map((m, i) => `<option value="${i}" ${i === c.map ? 'selected' : ''}>${m.name}</option>`).join('');
     const field = !!(MAPS[c.map] || {}).field;
@@ -1354,15 +1360,34 @@ function renderLobby() {
     const lens = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 0];
     $('lc-len').innerHTML = lens.map((l) => `<option value="${l}" ${l === c.len ? 'selected' : ''}>${l ? l + ' км' : '∞ бесконечная'}</option>`).join('');
     $('lc-fm').value = c.fieldMode;
+    $('lc-car').innerHTML = `<option value="-1" ${c.car < 0 ? 'selected' : ''}>Любые</option>` + CARS.map((s, i) => `<option value="${i}" ${i === c.car ? 'selected' : ''}>Только ${s.name}</option>`).join('');
   }
   renderOnlineResults();
 }
 const escapeHtml = (t) => String(t).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 function sendConfig() {
-  net.send({ t: 'config', config: { map: +$('lc-map').value, mode: $('lc-mode').value, len: +$('lc-len').value, fieldMode: $('lc-fm').value } });
+  net.send({ t: 'config', config: { map: +$('lc-map').value, mode: $('lc-mode').value, len: +$('lc-len').value, fieldMode: $('lc-fm').value, car: +$('lc-car').value } });
 }
-['lc-map', 'lc-mode', 'lc-len', 'lc-fm'].forEach((id) => $(id).addEventListener('change', () => { audio.click(); sendConfig(); }));
-$('lobby-start').addEventListener('click', () => { audio.click(); if (net.state === 'lobby') net.send({ t: 'start' }); });
+function setLobbyCar(i) {
+  sel.car = i; saveSel();
+  if (W && state === 'menu') spawnPlayer(6, -2.8);
+  net.send({ t: 'profile', ...myProfile() });
+}
+// хост выбрал машину для всех — сам тоже пересаживается на неё
+$('lc-car').addEventListener('change', () => { const v = +$('lc-car').value; if (v >= 0 && sel.car !== v) setLobbyCar(v); });
+$('carreq-ok').addEventListener('click', () => { audio.click(); const c = net.config; if (c && c.car >= 0) setLobbyCar(c.car); renderLobby(); });
+$('carreq-leave').addEventListener('click', () => { audio.click(); net.disconnect(true); showScreen('online'); });
+['lc-map', 'lc-mode', 'lc-len', 'lc-fm', 'lc-car'].forEach((id) => $(id).addEventListener('change', () => { audio.click(); sendConfig(); }));
+$('lobby-start').addEventListener('click', () => {
+  audio.click();
+  if (net.state === 'racing' && !confirm('Кто-то ещё в прошлом заезде. Начать новый заезд для всех?')) return;
+  const c = net.config;
+  if (c && c.car >= 0) {
+    const bad = [...net.players.values()].filter((p) => p.car !== c.car).length;
+    if (bad && !confirm(`${bad} игрок(а) не на ${CARS[c.car].name} — они не поедут. Стартовать?`)) return;
+  }
+  net.send({ t: 'start' });
+});
 $('lobby-leave').addEventListener('click', () => { audio.click(); net.disconnect(true); showScreen('online'); });
 function lobbyCar(d) {
   sel.car = (sel.car + d + CARS.length) % CARS.length; saveSel(); audio.click();
@@ -1413,6 +1438,7 @@ net.on.close = () => {
 net.on.start = (m) => {
   // применяем настройки хоста и стартуем все одновременно, на одинаковой трассе (общий seed)
   const c = m.config;
+  if (!m.racers.includes(net.id)) { if (menuScreen === 'lobby') renderLobby(); showMsg('Заезд начался без тебя: нужна машина, которую выбрал хост', 3, '#ff6b6b'); return; }
   sel.map = Math.min(c.map, MAPS.length - 1);
   const mi = MODES.findIndex((x) => x.id === c.mode); sel.mode = mi < 0 ? 0 : mi;
   const field = !!MAPS[sel.map].field;

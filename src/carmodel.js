@@ -373,7 +373,7 @@ export function buildCarModel(spec, color, opts = {}) {
   }
 
   // ===== салон (виден через стёкла) =====
-  const floorY = 0.45;
+  const floorY = Math.max(0.45, b.upper[b.upper.length - 1][1] - 0.05); // пол салона не ниже днища кузова (у BIGFOOT кузов высоко — сиденья раньше висели под ним)
   box(cabW * 0.9, 0.2, 0.35, M.interior, 0, beltY - 0.05, c[0][0] - 0.25, group);         // торпедо
   for (const sx of [1, -1]) {
     const x = sx * cabW * 0.24;
