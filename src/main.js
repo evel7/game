@@ -1309,6 +1309,8 @@ function renderLobby() {
   if (!net.connected) { showScreen('online'); return; }
   const mm = net.mm;
   $('lobby-code').textContent = mm ? '' : net.code;
+  $('lobby-code2').textContent = net.code;
+  $('lobby-codebox').classList.toggle('hidden', !!mm);
   $('menu-lobby').querySelector('h2').firstChild.textContent = mm ? 'Быстрый матч ' : 'Комната ';
   $('lobby-type').textContent = mm
     ? `${mm.mode === 'drift' ? 'Дрифт' : 'Гонка'} · ${mm.len ? mm.len + ' км' : 'бесконечная'} · ${mm.size} игроков · соперники: ${{ any: 'любые машины', class: 'класс ' + carClass(CARS[sel.car]), same: CARS[sel.car].name }[mm.carRule]}`
