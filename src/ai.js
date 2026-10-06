@@ -11,8 +11,8 @@ export class Rival {
     this.fi = fi; this.d = lat; this.targetD = lat; this.dv = 0;
     this.v = 0; this.skill = skill; this.grip = grip;
     // быстрее и цепче, чем раньше: выше макс. скорость, лучше сцепление в поворотах
-    this.top = Math.min(88, 54 + spec.hp / 19) * skill;
-    this.mu = ((spec.muFront + spec.muRear) / 2) * grip * 1.06;
+    this.top = Math.min(96, 58 + spec.hp / 16) * skill;
+    this.mu = ((spec.muFront + spec.muRear) / 2) * grip * 1.15;
     this.laneTimer = 1 + Math.random() * 2.5;
     this.stopAt = Infinity; // индекс, после которого соперник плавно останавливается (за финишем)
     this.wheelSpin = 0; this.steer = 0;
@@ -33,17 +33,17 @@ export class Rival {
       if (kk < 1e-4) continue;
       const vmax = Math.sqrt(this.mu * 9.81 / kk);
       const dist = k * SP;
-      target = Math.min(target, Math.sqrt(vmax * vmax + 2 * 10 * dist)); // тормозят позже и резче
+      target = Math.min(target, Math.sqrt(vmax * vmax + 2 * 12 * dist)); // тормозят позже и резче
     }
     // резинка относительно игрока
     const gap = player.idx - this.fi; // >0 — соперник позади
     // «резинка» включается не сразу — на старте все разгоняются честно
-    if (gap > 0 && (player.t ?? 99) > 8) target *= 1 + Math.min(0.25, gap / 250);
-    else if (gap < -160) target *= 0.9;
+    if (gap > 0 && (player.t ?? 99) > 5) target *= 1 + Math.min(0.3, gap / 200);
+    else if (gap < -260) target *= 0.95;
     if (this.bump > 0) { this.bump -= dt; target *= 0.8; }
     if (this.fi > this.stopAt) target = 0;
-    const acc = 8.0 * (1 - 0.55 * Math.min(1, this.v / this.top)); // резкий разгон, слабеет с ростом скорости
-    this.v += clamp(target - this.v, -13 * dt, acc * dt);
+    const acc = 9.8 * (1 - 0.5 * Math.min(1, this.v / this.top)); // резкий разгон, слабеет с ростом скорости
+    this.v += clamp(target - this.v, -15 * dt, acc * dt);
     this.v = Math.max(0, this.v);
 
     // смена полосы и объезд игрока
@@ -58,7 +58,7 @@ export class Rival {
     track.sample(this.fi + 10, tmp);
     const inner = clamp(tmp.k * 400, -1, 1) * (hw - 2);
     const want = clamp(this.targetD * 0.6 + inner * 0.4, -(hw - 1.3), hw - 1.3);
-    this.dv += (clamp((want - this.d) * 2.6, -5, 5) - this.dv) * Math.min(1, dt * 6); // шустрее перестраиваются
+    this.dv += (clamp((want - this.d) * 3.2, -6.5, 6.5) - this.dv) * Math.min(1, dt * 8); // шустрее перестраиваются
     this.d += this.dv * dt;
     this.d = clamp(this.d, -(hw - 1.1), hw - 1.1);
 

@@ -95,7 +95,9 @@ export class Vehicle {
     this.intent = Math.max(0, (this.intent || 0) - dt);
     const calm = opts.easy && this.intent <= 0;
     if (opts.assist > 0 && u > 3) {
-      target += clamp(beta, -0.9, 0.9) * 0.85 * opts.assist * (1 - 0.5 * Math.abs(input.steer));
+      // у цепких машин вне заноса контрруль слабее — иначе после поворота машину раскачивает
+      const ak = Math.abs(beta) > 0.35 || input.handbrake > 0.1 ? 1 : 1 - 0.65 * this.gripK;
+      target += clamp(beta, -0.9, 0.9) * 0.85 * opts.assist * ak * (1 - 0.5 * Math.abs(input.steer));
     }
     target = clamp(target, -s.steerMax * 1.25, s.steerMax * 1.25);
     const steerRate = 7.5; // рад/с — быстрые перекладки руля в «восьмёрках»
@@ -184,7 +186,9 @@ export class Vehicle {
     if (calm) hsGrip = 1 + 0.8 * clamp((spd - 15) / 30, 0, 1);
     // цепкие машины без ручника: задняя ось держит лучше — не срывается сама от газа и руля
     const gk = input.handbrake > 0.1 ? 0 : this.gripK;
-    const FmaxF = muF * Fzf * lsF * hsGrip, FmaxR = muR * Fzr * lsR * hsGrip * (1 + gk * (opts.real ? 0.22 : 0.12));
+    // дрифт-машины тоже должны уметь пройти поворот на скорости: небольшой запас сцепления сзади (ручник/пинок по-прежнему срывают)
+    const gkR = input.handbrake > 0.1 || this.kickT > 0 ? 0 : Math.max(this.gripK, 0.3);
+    const FmaxF = muF * Fzf * lsF * hsGrip * (1 + gk * 0.08), FmaxR = muR * Fzr * lsR * hsGrip * (1 + gkR * (opts.real ? 0.28 : 0.16));
 
     // ---------- продольные силы ----------
     let FxF = 0, FxR = 0;
@@ -284,7 +288,7 @@ export class Vehicle {
     // помощь при перекладке заноса (левый дрифт → правый): если руль повёрнут против текущего вращения,
     // добавляем немного момента в сторону руля — машина охотно «перекидывается», как в аркадных дрифт-играх
     if (opts.assist > 0 && u > 5 && Math.abs(input.steer) > 0.3 && Math.sign(input.steer) !== Math.sign(this.r) && (Math.abs(beta) > 0.12 || this.rearSlide > 0.4)) {
-      this.r += input.steer * (opts.real ? 3.0 : 2.3) * dt * opts.assist * Math.min(1, u / 15);
+      this.r += input.steer * (opts.real ? 3.0 : 2.3) * dt * opts.assist * Math.min(1, u / 15) * (Math.abs(beta) > 0.3 ? 1 : 1 - 0.6 * gk);
     }
     const drifting = Math.abs(beta) > 0.15;
     // как в FR Legends: в управляемом заносе с газом машина почти не теряет скорость
@@ -292,7 +296,8 @@ export class Vehicle {
       const k = 3.2 * opts.assist * throttle * dt / spd;
       this.vx += this.vx * k; this.vz += this.vz * k;
     }
-    this.r *= 1 - Math.min(0.5, (s.yawDamp ?? 0.6) * (drifting ? (opts.real ? 0.4 : 0.8) : 1) * dt); // лёгкое демпфирование
+    // лёгкое демпфирование; цепкие машины вне заноса гасят раскачку сильнее
+    this.r *= 1 - Math.min(0.5, (s.yawDamp ?? 0.6) * (drifting ? (opts.real ? 0.4 : 0.8) : 1 + 1.6 * gk) * dt);
     // стабилизация на скорости в лёгком режиме: гасим резкие «виляния», если не в заносе
     if (calm && u > 12) {
       const rTarget = u * Math.tan(this.steer) / this.L * 0.95;

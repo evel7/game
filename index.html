@@ -22,6 +22,7 @@
     <button class="btn" data-go="records">🏆 Рекорды</button>
     <button class="btn" data-go="settings">⚙ Настройки</button>
     <button class="btn" data-go="controls">🎮 Управление</button>
+    <button class="btn btn-fs touch-only" type="button">⛶ Полный экран</button>
     <div class="foot">Все машины, трассы и звуки созданы процедурно — без чужих моделей и музыки.</div>
   </div>
 
@@ -86,11 +87,16 @@
       </select></label>
     <label class="opt">Мультяшные контуры машин <input type="checkbox" id="set-outline" /></label>
     <label class="opt">Дым из-под колёс <input type="checkbox" id="set-smoke" /></label>
-    <label class="opt">Помощь в дрифте (авто-контрруль) <input type="checkbox" id="set-assist" /></label>
+    <label class="opt">Помощь руля (авто-контрруль)
+      <select id="set-assist"><option value="all">Во всех режимах</option><option value="drift">Только в режиме «Дрифт»</option><option value="off">Выключена</option></select></label>
     <label class="opt">Ручная коробка (E / Q) <input type="checkbox" id="set-manual" /></label>
     <label class="opt">Графика
       <select id="set-quality"><option value="0">Низкая (слабые ПК/телефоны)</option><option value="1">Средняя</option><option value="2">Высокая</option></select>
     </label>
+    <label class="opt">Дальность прорисовки
+      <select id="set-draw"><option value="0">Близко (больше FPS)</option><option value="1">Обычная</option><option value="2">Далеко (красивее)</option></select>
+    </label>
+    <label class="opt">Полный экран <button class="btn small btn-fs" type="button">⛶ Вкл / выкл</button></label>
     <label class="opt">Камера по умолчанию
       <select id="set-camera"><option value="0">Сзади</option><option value="1">Сзади, дальняя</option><option value="2">С капота</option><option value="3">Кинокамера</option></select>
     </label>
@@ -202,6 +208,7 @@
 
   <!-- ===== Сенсорное управление ===== -->
   <div id="touch" class="hidden">
+    <button id="hud-fs" class="btn-fs" type="button">⛶</button>
     <div class="t-left">
       <div class="tbtn" data-touch="left">◀</div>
       <div class="tbtn" data-touch="right">▶</div>
@@ -241,6 +248,6 @@
   <div id="countdown"></div>
   <div id="fps" class="hidden"></div>
 
-  <script src="dist/game.js?v=1791280768829"></script>
+  <script src="dist/game.js?v=1791282180956"></script>
 </body>
 </html>
