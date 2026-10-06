@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { mulberry32, noise1, fbm2, canvasTexture, clamp, smooth } from './utils.js';
 import { buildPropGeometries } from './maps.js';
 
@@ -16,6 +17,29 @@ const AHEAD_CHUNKS = 11;
 const BEHIND_CHUNKS = 3;
 export const CP_EVERY = 500;  // чекпоинт каждые 1000 м
 const CP_FIRST = 400;
+
+// Объединяем меши чанка с одинаковым материалом в один — меньше вызовов отрисовки (заметно поднимает FPS)
+function mergeChunk(grp) {
+  const buckets = new Map();
+  for (const o of grp.children) {
+    if (!o.isMesh || o.isInstancedMesh || Array.isArray(o.material) || o.userData.sharedGeo || o.children.length || o.renderOrder) continue;
+    const g = o.geometry;
+    const key = o.material.uuid + '|' + Object.keys(g.attributes).sort().join(',') + '|' + (g.index ? 'i' : 'n') + '|' + o.castShadow + o.receiveShadow;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(o);
+  }
+  for (const list of buckets.values()) {
+    if (list.length < 2) continue;
+    const geos = list.map((o) => { o.updateMatrix(); const g = o.geometry.clone(); g.applyMatrix4(o.matrix); return g; });
+    const merged = mergeGeometries(geos);
+    geos.forEach((g) => g.dispose());
+    if (!merged) continue;
+    const m = new THREE.Mesh(merged, list[0].material);
+    m.castShadow = list[0].castShadow; m.receiveShadow = list[0].receiveShadow;
+    for (const o of list) { grp.remove(o); o.geometry.dispose(); }
+    grp.add(m);
+  }
+}
 
 export class Track {
   constructor(scene, map, seed = 1, quality = 1, opts = {}) {
@@ -325,7 +349,12 @@ export class Track {
         this.buildChunk(c); built++;
       }
     }
+    // чанки дальше, чем видно сквозь туман, не рисуем (они всё равно полностью «в тумане»), но держим готовыми
+    const pp = this.P(Math.max(this.base, Math.min(this.lastIdx, Math.round(playerIdx))));
+    const vis = (this.map.fog?.far ?? 700) + 90;
     for (const [c, grp] of this.chunks) {
+      const u = grp.userData;
+      if (u.cx !== undefined) grp.visible = Math.hypot(u.cx - pp.x, u.cy - pp.y, u.cz - pp.z) < vis;
       if (c < pc - BEHIND_CHUNKS) {
         this.root.remove(grp);
         grp.traverse((o) => { if (o.geometry && !o.userData.sharedGeo) o.geometry.dispose(); if (o.isInstancedMesh) o.dispose(); });
@@ -417,6 +446,9 @@ export class Track {
       if (i === this.finishIdx) { this.buildGate(grp, i, this.gateMatFinish); this.buildFinishLine(grp, i); this.buildStands(grp, i - 14); this.buildStands(grp, i + 20); }
     }
 
+    mergeChunk(grp);
+    const pc = this.P(i0 + (CH >> 1));
+    grp.userData.cx = pc.x; grp.userData.cy = pc.y; grp.userData.cz = pc.z;
     this.root.add(grp);
     this.chunks.set(c, grp);
   }

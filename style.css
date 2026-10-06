@@ -170,3 +170,40 @@ body.touch .gauge { right: 50%; transform: translateX(50%) scale(.7); transform-
 .results h3 { font-size: 14px; letter-spacing: 1px; text-transform: uppercase; color: #ffcc00; margin: 6px 0 4px; }
 .results small { opacity: .7; font-size: 12px; }
 .btn:disabled { opacity: .5; pointer-events: none; }
+
+/* ===== обновление 3: меню машин, рекорды, быстрый матч ===== */
+#menu-garage { width: 430px; }
+.garage-count { font-size: 13px; opacity: .6; letter-spacing: 0; text-transform: none; margin-left: 6px; }
+.car-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; overflow-y: auto; flex: 1 1 auto; min-height: 120px; padding: 2px 4px 2px 0; }
+.car-card { background: rgba(255,255,255,.06); border: 2px solid rgba(255,255,255,.1); border-radius: 10px; cursor: pointer; padding: 4px 4px 6px; text-align: center; transition: border-color .12s, background .12s; }
+.car-card:hover { border-color: rgba(255,204,0,.6); }
+.car-card.sel { border-color: #ffcc00; background: rgba(255,204,0,.14); }
+.car-card .thumb { width: 100%; aspect-ratio: 16 / 9; display: block; border-radius: 6px; background: radial-gradient(circle at 50% 70%, rgba(255,255,255,.12), rgba(255,255,255,0) 70%); object-fit: contain; }
+.car-card b { display: block; font-size: 12px; font-style: italic; letter-spacing: .3px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cls { display: inline-block; min-width: 20px; padding: 0 5px; border-radius: 5px; font-size: 11px; font-weight: 900; font-style: normal; color: #111; margin-left: 6px; vertical-align: middle; }
+.cls-D { background: #9aa0a6; } .cls-C { background: #7ae582; } .cls-B { background: #4cc9f0; } .cls-A { background: #c77dff; } .cls-S { background: #ffcc00; }
+.garage-info { position: fixed; right: 16px; top: 16px; z-index: 11; width: 330px; max-width: 46vw; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px;
+  background: rgba(8,8,16,.82); border: 1px solid rgba(255,255,255,.12); border-radius: 14px; }
+.garage-info .car-name { font-size: 22px; }
+.garage-info .car-desc { font-size: 12.5px; min-height: 0; }
+.garage-info .stat { grid-template-columns: 105px 1fr; font-size: 12px; }
+@media (max-width: 800px) { #menu-garage { width: 100vw; } .garage-info { top: auto; bottom: 8px; right: 8px; left: 8px; width: auto; max-width: none; } .garage-info .car-desc { display: none; } .car-grid { grid-template-columns: repeat(4, 1fr); } }
+.rec-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.rec-filters label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; opacity: .85; }
+.rec-filters select { background: #1c1c28; color: #fff; border: 1px solid #444; border-radius: 6px; padding: 5px; font-size: 14px; }
+#records-table { overflow-y: auto; flex: 1 1 auto; }
+#records-table th { text-align: left; font-size: 12px; opacity: .7; padding: 4px; border-bottom: 1px solid rgba(255,255,255,.2); cursor: pointer; white-space: nowrap; }
+#records-table th.on { color: #ffcc00; opacity: 1; }
+#records-table td { padding: 5px 4px; border-bottom: 1px solid rgba(255,255,255,.08); font-size: 13px; }
+#records-table td small { opacity: .6; display: block; font-size: 11px; }
+#menu-records { width: 560px; }
+.rec-group { color: #ffcc00; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; padding-top: 10px !important; }
+.mm-box { display: flex; flex-direction: column; gap: 6px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.12); border-radius: 12px; padding: 10px 12px; }
+.mm-box .opt { padding: 4px 0; font-size: 14px; }
+.seg { display: flex; gap: 6px; }
+.seg button { flex: 1; text-align: center; padding: 6px 8px; font-size: 14px; }
+.seg button.on { background: #ffcc00; color: #111; border-color: #ffcc00; }
+.mm-search { text-align: center; }
+.mm-search .mm-count { font-size: 44px; font-weight: 900; font-style: italic; color: #ffcc00; line-height: 1.1; }
+.mm-search .mm-cd { font-size: 64px; font-weight: 900; color: #7ae582; line-height: 1; }
+.opt.col { flex-direction: column; align-items: stretch; gap: 6px; }
