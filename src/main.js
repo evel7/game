@@ -21,7 +21,7 @@ import { net, DEFAULT_SERVER } from './net.js';
 const MODES = [
   { id: 'race', name: 'Гонка', desc: 'Соперники, чекпоинты и таймер. Очки за дистанцию, обгоны и дрифт.', timer: 50, rivals: 5,
     bonus: (n) => Math.max(22, 40 - n * 2) },
-  { id: 'drift', name: 'Дрифт', desc: 'Только ты и трасса. Очки за занос, чекпоинты и длинные серии добавляют время.', timer: 60, rivals: 0,
+  { id: 'drift', name: 'Дрифт', desc: 'Очки за занос. На трассе с финишем итог = очки дрифта + бонус за быстрое время (в онлайне ещё и за место на финише).', timer: 60, rivals: 0,
     bonus: (n) => Math.max(26, 42 - n * 1.5) },
   { id: 'free', name: 'Свободная езда', desc: 'Без таймера и давления. Катайся и тренируй дрифт.', timer: 0, rivals: 3,
     bonus: () => 0 },
@@ -39,7 +39,9 @@ const store = {
 };
 const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 if (isTouch) document.body.classList.add('touch');
-const settings = Object.assign({ vol: 0.8, music: true, assist: true, manual: false, quality: isTouch ? 0 : 1, camera: 0, units: 'kmh', fps: 0, showFps: false, sfxVol: 0.8, musicVol: 0.3, easy: true, smoke: true, outline: true, autoRes: true }, store.get('settings', {}));
+const settings = Object.assign({ vol: 0.8, music: true, assist: true, manual: false, quality: isTouch ? 0 : 1, camera: 0, units: 'kmh', fps: 0, showFps: false, sfxVol: 0.8, musicVol: 0.3, easy: true, smoke: true, outline: true, autoRes: false, assistMode: 'all', draw: 1 }, store.get('settings', {}));
+// миграция: старая галочка «помощь» → режим помощи; авто-разрешение по умолчанию выключено (картинка мылилась)
+if (!settings.v3) { settings.v3 = 1; settings.autoRes = false; if (settings.assist === false) settings.assistMode = 'off'; }
 if (!settings.handling) settings.handling = settings.easy === false ? 'real' : 'easy';
 settings.easy = settings.handling === 'easy';
 // len — длина трассы в км (0 = бесконечная); fieldMode — полигон: obst (с препятствиями), clean (чистое поле), flat (чистое и ровное)
@@ -63,7 +65,7 @@ const canvas = $('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.shadowMap.type = THREE.PCFShadowMap; // PCF заметно дешевле PCFSoft, а в мультяшной графике разницы почти не видно
+renderer.shadowMap.type = THREE.PCFSoftShadowMap; // мягкие тени, как было изначально
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 1600);
 const pmrem = new THREE.PMREMGenerator(renderer);
@@ -160,7 +162,8 @@ function buildWorld(mapIdx, seed, opts = {}) {
   const map = MAPS[mapIdx];
   const group = new THREE.Group();
   scene.add(group);
-  scene.fog = new THREE.Fog(map.fog.color, map.fog.near, map.fog.far);
+  const fogK = [0.8, 1, 1.35][+settings.draw] ?? 1; // дальность прорисовки
+  scene.fog = new THREE.Fog(map.fog.color, map.fog.near * fogK, map.fog.far * fogK);
   scene.background = new THREE.Color(map.fog.color);
   if (W_env) W_env.dispose();
   W_env = pmrem.fromScene(makeEnvScene(map), 0.02).texture;
@@ -183,7 +186,7 @@ function buildWorld(mapIdx, seed, opts = {}) {
   const fm = opts.fieldMode ?? sel.fieldMode;
   const track = map.field
     ? new Field(group, map, seed, +settings.quality, { props: fm === 'obst', flat: fm === 'flat' })
-    : new Track(group, map, seed, +settings.quality, { finishIdx: opts.finishIdx ?? Infinity });
+    : new Track(group, map, seed, +settings.quality, { finishIdx: opts.finishIdx ?? Infinity, draw: +settings.draw });
   const farPlane = new THREE.Mesh(new THREE.PlaneGeometry(5000, 5000), new THREE.MeshLambertMaterial({ color: map.ground.far }));
   farPlane.rotation.x = -Math.PI / 2; group.add(farPlane);
 
@@ -251,11 +254,11 @@ function makeGhost(r, model) {
     o.material = cache.get(o.material);
   });
 }
-const LOD_FAR = 65, LOD_NEAR = 55; // м: дальше — упрощённая модель (с запасом, чтобы не мигало на границе)
+const LOD_FAR = 65, LOD_NEAR = 55; // работает только на низкой графике // м: дальше — упрощённая модель (с запасом, чтобы не мигало на границе)
 function setGhostOpacity(r, d) {
   const op = clamp((d - 4) / 14, 0.3, 1);
   const model = r.model;
-  const far = model ? (model.far ? d > LOD_NEAR : d > LOD_FAR) : false;
+  const far = model && +settings.quality === 0 ? (model.far ? d > LOD_NEAR : d > LOD_FAR) : false;
   const lodChanged = model && far !== model.far;
   if (lodChanged) setCarLod(model, far);
   if (Math.abs(op - (r.op ?? 1)) < 0.02 && !lodChanged) return;
@@ -321,8 +324,11 @@ function spawnRivals(n) {
     const model = buildCarModel(spec, color, { night: W.map.night, outline: settings.outline });
     model._tailBase = W.map.night ? 1.2 : 0.35;
     W.group.add(model.root);
-    const r = new Rival(spec, model, grid[i][0], grid[i][1], 0.9 + Math.random() * 0.12, W.map.grip);
+    const r = new Rival(spec, model, grid[i][0], grid[i][1], 0.97 + Math.random() * 0.1, W.map.grip);
     makeGhost(r, model);
+    r.name = `Бот ${i + 1}`;
+    r.label = nameSprite(r.name);
+    model.root.add(r.label);
     r.ahead = grid[i][0] > 6 || (grid[i][0] === 6 && false);
     r.place(W.track, 0);
     W.rivals.push(r);
@@ -493,9 +499,12 @@ function physicsStep(inp) {
   veh.px = veh.x; veh.pz = veh.z; veh.ph = veh.h; veh.pY = veh.roadY;
   const track = W.track;
   const easy = settings.handling === 'easy';
+  // помощь руля: везде / только в режиме «Дрифт» (и на полигоне) / выключена
+  const am = settings.assistMode;
+  const asOn = am === 'all' || (am === 'drift' && (G.mode.id === 'drift' || G.mode.id === 'field'));
   const res = veh.step(STEP, inp, easy
-    ? { grip: W.map.grip * 1.12, assist: settings.assist ? 1.15 : 0, manual: settings.manual, easy: true }
-    : { grip: W.map.grip, assist: settings.assist ? 0.45 : 0, manual: settings.manual, easy: false, real: true });
+    ? { grip: W.map.grip * 1.12, assist: asOn ? 1.15 : 0, manual: settings.manual, easy: true }
+    : { grip: W.map.grip, assist: asOn ? 0.45 : 0, manual: settings.manual, easy: false, real: true });
   if (res.shifted) { audio.shift(); if (res.shifted > 0 && inp.throttle > 0.5 && Math.random() < 0.35) audio.backfire(); }
   inp.shiftUp = inp.shiftDown = false;
   if (track.isField) { fieldStep(veh, track); return; }
@@ -763,6 +772,13 @@ function finishRace(finished = false) {
   G.finished = finished;
   if (finished && G.mode.id === 'race' && W.rivals.length) G.place = 1 + W.rivals.filter((r) => !r.out && r.finOrder !== undefined).length;
   if (finished && G.mode.id === 'race' && G.online) G.place = 1 + net.results.filter((r) => r.finished).length;
+  // Дрифт на трассе с финишем: итог = очки дрифта + бонус за время (быстрее 60 км/ч в среднем) + онлайн бонус за место на финише
+  if (G.mode.id === 'drift' && G.finite) {
+    G.timeBonus = finished ? Math.max(0, Math.round((G.lenKm * 60 - G.elapsed) * 50)) : 0;
+    G.finPlace = finished && G.online ? 1 + net.results.filter((r) => r.finished).length : 0;
+    G.placeBonus = [0, 5000, 3000, 1500][G.finPlace] || 0;
+    G.score = G.driftTotal + G.timeBonus + G.placeBonus;
+  }
   state = 'over';
   audio.gameOver();
   const key = recKey(G.mode.id, W.map.id, G.lenKm);
@@ -787,6 +803,7 @@ function finishRace(finished = false) {
     ['Макс. скорость', speedStr(G.maxSpeed)], ['Лучший дрифт', G.bestDrift.toLocaleString('ru-RU')],
     ['Все очки дрифта', G.driftTotal.toLocaleString('ru-RU')], ['Чекпоинты', G.cpCount]);
   if (G.mode.id === 'race' && !G.online) rows.push(['Обгоны', G.overtakes]);
+  if (G.mode.id === 'drift' && G.finite) { rows.push(['Бонус за время', '+' + G.timeBonus.toLocaleString('ru-RU')]); if (G.online) rows.push(['Бонус за место на финише', G.finPlace ? `${G.finPlace}-й · +${G.placeBonus.toLocaleString('ru-RU')}` : '—']); }
   rows.push(['Удары', G.hits]);
   if (!finished) rows.push(['Время в заезде', fmtTime(G.elapsed)]);
   if (old && !isRec) rows.push(['Рекорд', timeRec ? (old.time ? fmtTime(old.time) : '—') : old.score.toLocaleString('ru-RU')]);
@@ -1200,7 +1217,7 @@ function renderRecords() {
 $('btn-reset-rec').addEventListener('click', () => { if (confirm('Удалить все рекорды?')) { records = {}; store.set('records', records); renderRecords(); } });
 
 function renderSettings() {
-  $('set-vol').value = settings.vol; $('set-music').checked = settings.music; $('set-assist').checked = settings.assist;
+  $('set-vol').value = settings.vol; $('set-music').checked = settings.music; $('set-assist').value = settings.assistMode; $('set-draw').value = settings.draw;
   $('set-manual').checked = settings.manual; $('set-quality').value = settings.quality; $('set-camera').value = settings.camera; $('set-units').value = settings.units;
   $('set-sfx').value = settings.sfxVol; $('set-musicvol').value = settings.musicVol;
   $('set-outline').checked = settings.outline;
@@ -1214,7 +1231,18 @@ $('set-outline').addEventListener('change', (e) => { settings.outline = e.target
 $('set-handling').addEventListener('change', (e) => { settings.handling = e.target.value; settings.easy = settings.handling === 'easy'; saveSettings(); });
 $('set-smoke').addEventListener('change', (e) => { settings.smoke = e.target.checked; saveSettings(); if (W) W.smoke.clear(); });
 $('set-music').addEventListener('change', (e) => { settings.music = e.target.checked; audio.setMusic(settings.music); saveSettings(); });
-$('set-assist').addEventListener('change', (e) => { settings.assist = e.target.checked; saveSettings(); });
+$('set-assist').addEventListener('change', (e) => { settings.assistMode = e.target.value; saveSettings(); });
+$('set-draw').addEventListener('change', (e) => { settings.draw = +e.target.value; saveSettings(); if (state !== 'race') buildWorld(sel.map, 7); });
+// полный экран (на телефонах особенно полезно)
+function toggleFullscreen() {
+  const d = document, el = d.documentElement;
+  const fs = d.fullscreenElement || d.webkitFullscreenElement;
+  try {
+    if (fs) (d.exitFullscreen || d.webkitExitFullscreen).call(d);
+    else { const req = el.requestFullscreen || el.webkitRequestFullscreen; if (req) { const pr = req.call(el, { navigationUI: 'hide' }); if (pr && pr.then) pr.then(() => screen.orientation?.lock?.('landscape').catch(() => {})).catch(() => {}); } }
+  } catch (e) { /* браузер не поддерживает */ }
+}
+for (const b of document.querySelectorAll('.btn-fs')) b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleFullscreen(); });
 $('set-manual').addEventListener('change', (e) => { settings.manual = e.target.checked; saveSettings(); });
 $('set-quality').addEventListener('change', (e) => { settings.quality = +e.target.value; saveSettings(); buildWorld(sel.map, 7); });
 $('set-camera').addEventListener('change', (e) => { settings.camera = +e.target.value; saveSettings(); });

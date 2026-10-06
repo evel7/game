@@ -57,6 +57,16 @@ const STYLE = {
   kaiju: { spokes: 6, rim: 0x111114, caliper: 0xf72585, rimDepth: 0.08, plate: '01 KG 760 DR' },
   proto: { spokes: 10, rim: 0x111114, caliper: 0xffd166, rimDepth: 0.02, plate: '01 KG 024 LM' },
   zenith: { spokes: 10, rim: 0x1c1c1f, caliper: 0xfca311, rimDepth: 0.02, plate: '01 KG 016 W1' },
+  bigfoot: { spokes: 6, rim: 0xc0c4cc, caliper: 0x333333, rimDepth: 0.12, plate: '01 KG 999 MT' },
+  semya: { spokes: 5, rim: 0xb8bcc4, caliper: 0x444444, rimDepth: 0.04, plate: '01 KG 777 VN' },
+  kross: { spokes: 5, rim: 0x3a3a3f, caliper: 0xe76f51, rimDepth: 0.05, plate: '01 KG 340 KR' },
+  bukhanka: { spokes: 4, rim: 0x606c38, caliper: 0x333333, rimDepth: 0.06, plate: '01 KG 452 UZ' },
+  titan: { spokes: 10, rim: 0x1c1c1f, caliper: 0xffbe0b, rimDepth: 0.03, plate: '01 KG 650 TT' },
+  punto: { spokes: 7, rim: 0xe0e0e0, caliper: 0xd62828, rimDepth: 0.04, plate: '01 KG 230 PR' },
+  charger: { spokes: 5, rim: 0x2b2b2b, caliper: 0xf48c06, rimDepth: 0.07, plate: '01 KG 717 HC' },
+  diplomat: { spokes: 10, rim: 0xe8e8ea, caliper: 0x555555, rimDepth: 0.03, plate: '01 KG 001 VIP', chromeBumpers: true },
+  dune: { spokes: 6, rim: 0x222222, caliper: 0x333333, rimDepth: 0.08, plate: '01 KG 200 DB', cage: true },
+  gelato: { spokes: 5, rim: 0xffffff, caliper: 0x444444, rimDepth: 0.04, plate: '01 KG 123 IC' },
 };
 
 // ---------- утилиты ----------
@@ -618,7 +628,7 @@ export function buildCarModel(spec, color, opts = {}) {
   for (const [z, sx, front] of [[b.wheelF, 1, true], [b.wheelF, -1, true], [b.wheelR, 1, false], [b.wheelR, -1, false]]) {
     const pivot = new THREE.Group();
     pivot.position.set(sx * b.track / 2, cy, z);
-    const wheel = buildWheel(wr, front ? 0.25 : 0.27, st, sx);
+    const wheel = buildWheel(wr, b.tireW ?? (front ? 0.25 : 0.27), st, sx);
     pivot.add(wheel);
     // суппорт — не вращается
     const cal = box(0.07, wr * 0.36, wr * 0.26, caliperMat, -sx * 0.0, wr * 0.3, -wr * 0.3, pivot);

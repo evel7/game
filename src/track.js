@@ -44,6 +44,8 @@ function mergeChunk(grp) {
 export class Track {
   constructor(scene, map, seed = 1, quality = 1, opts = {}) {
     this.scene = scene; this.map = map; this.seed = seed; this.quality = quality;
+    this.draw = opts.draw ?? 1;
+    this.ahead = [8, AHEAD_CHUNKS, 16][this.draw] ?? AHEAD_CHUNKS;
     // finishIdx — индекс точки финиша (трасса заданной длины); Infinity — бесконечная трасса
     this.finishIdx = opts.finishIdx ?? Infinity;
     this.rnd = mulberry32(seed * 9301 + 49297);
@@ -57,7 +59,7 @@ export class Track {
     scene.add(this.root);
     this.makeMaterials();
     this.propGeo = buildPropGeometries(map);
-    this.ensure(CH * (AHEAD_CHUNKS + 2));
+    this.ensure(CH * (this.ahead + 2));
   }
 
   // ---------------- генерация осевой линии ----------------
@@ -74,6 +76,14 @@ export class Track {
     };
     const dir0 = r() < 0.5 ? 1 : -1;
     const roll = r();
+    // рельеф: иногда к повороту/прямой добавляется подъём, спуск или горб (подъём-спуск)
+    if (g.s > 300 && !(g.ev && g.s < g.ev.s0 + g.ev.L) && r() < 0.38) this.planElevation();
+    if (r() < 0.12) {
+      // резкий поворот: малый радиус, большой угол
+      const c = curve(t.minR * (0.72 + r() * 0.25), 1.0 + r() * 0.6, dir0, g.h);
+      this.queue = [straight(15 + r() * 40)];
+      return c.seg;
+    }
     if (roll < 0.2) {
       return straight(t.straight[0] + r() * (t.straight[1] - t.straight[0]));
     }
@@ -109,6 +119,24 @@ export class Track {
     return res.seg;
   }
 
+  // событие рельефа на ближайшие L метров: подъём / спуск (меняют уровень) или горб / яма
+  planElevation() {
+    const r = this.rnd, g = this.g;
+    const hs = clamp(this.map.track.hill / 9, 0.45, 1.5);
+    const L = 110 + r() * 170;
+    const from = g.lvl || 0;
+    const kind = r();
+    let to = from, crest = 0;
+    if (kind < 0.55) {
+      // подъём или спуск; уровень держим в разумных пределах, чтобы трасса не уходила в небо
+      const A = Math.min(L * 0.12, (8 + r() * 14) * hs * (L / 200)); // уклон не круче ~18%
+      const lim = 26 * hs;
+      to = from + (from > lim * 0.4 ? -A : from < -lim * 0.4 ? A : (r() < 0.5 ? A : -A));
+      to = clamp(to, -lim, lim);
+    } else crest = (r() < 0.7 ? 1 : -1) * Math.min(L * 0.06, (5 + r() * 7) * hs); // горб или яма
+    g.ev = { s0: g.s, L, from, to, crest };
+  }
+
   genPoint() {
     const g = this.g;
     if (g.seg.u >= g.seg.L) g.seg = this.newSegment();
@@ -123,6 +151,11 @@ export class Track {
       y: this.map.track.hill * (noise1(g.s * 0.0042, this.seed) * 2 - 1) + (noise1(g.s * 0.021, this.seed + 5) - 0.5) * this.map.track.hill * 0.15,
       lx: Math.cos(g.h), lz: -Math.sin(g.h),
     };
+    if (g.ev) {
+      const x = clamp((g.s - g.ev.s0) / g.ev.L, 0, 1);
+      g.lvl = g.ev.from + (g.ev.to - g.ev.from) * smooth(x);
+      p.y += g.lvl + g.ev.crest * Math.sin(Math.PI * x) ** 2;
+    }
     // первые метры — ровная площадка старта
     if (g.s < 120) p.y *= g.s / 120;
     this.pts.push(p);
@@ -340,9 +373,9 @@ export class Track {
   // ---------------- построение чанков ----------------
   update(playerIdx) {
     const pc = Math.floor(playerIdx / CH);
-    this.ensure((pc + AHEAD_CHUNKS + 1) * CH + 2);
+    this.ensure((pc + this.ahead + 1) * CH + 2);
     let built = 0;
-    for (let c = Math.max(0, pc - BEHIND_CHUNKS); c <= pc + AHEAD_CHUNKS; c++) {
+    for (let c = Math.max(0, pc - BEHIND_CHUNKS); c <= pc + this.ahead; c++) {
       if (!this.chunks.has(c)) {
         // не строим больше двух чанков за кадр, чтобы не было рывков
         if (built >= 2 && c > pc + 2) break;
@@ -351,7 +384,8 @@ export class Track {
     }
     // чанки дальше, чем видно сквозь туман, не рисуем (они всё равно полностью «в тумане»), но держим готовыми
     const pp = this.P(Math.max(this.base, Math.min(this.lastIdx, Math.round(playerIdx))));
-    const vis = (this.map.fog?.far ?? 700) + 90;
+    // скрываем дальние чанки только на «близкой» дальности прорисовки
+    const vis = this.draw === 0 ? (this.map.fog?.far ?? 700) * 0.8 + 60 : Infinity;
     for (const [c, grp] of this.chunks) {
       const u = grp.userData;
       if (u.cx !== undefined) grp.visible = Math.hypot(u.cx - pp.x, u.cy - pp.y, u.cz - pp.z) < vis;
