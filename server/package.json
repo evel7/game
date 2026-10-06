@@ -1,0 +1,11 @@
+{
+  "name": "endless-drift-server",
+  "version": "1.0.0",
+  "description": "Онлайн-сервер для ENDLESS DRIFT: комнаты и пересылка позиций машин (WebSocket)",
+  "main": "index.js",
+  "private": true,
+  "scripts": { "start": "node index.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "ws": "^8.18.0" },
+  "license": "MIT"
+}

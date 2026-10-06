@@ -10,9 +10,11 @@ export class Rival {
     this.spec = spec; this.model = model;
     this.fi = fi; this.d = lat; this.targetD = lat; this.dv = 0;
     this.v = 0; this.skill = skill; this.grip = grip;
-    this.top = (44 + spec.hp / 24) * skill;
-    this.mu = ((spec.muFront + spec.muRear) / 2) * grip * 0.92;
-    this.laneTimer = 2 + Math.random() * 4;
+    // быстрее и цепче, чем раньше: выше макс. скорость, лучше сцепление в поворотах
+    this.top = Math.min(88, 54 + spec.hp / 19) * skill;
+    this.mu = ((spec.muFront + spec.muRear) / 2) * grip * 1.06;
+    this.laneTimer = 1 + Math.random() * 2.5;
+    this.stopAt = Infinity; // индекс, после которого соперник плавно останавливается (за финишем)
     this.wheelSpin = 0; this.steer = 0;
     this.ahead = true; this.h = 0;
     this.pose = {};
@@ -25,29 +27,30 @@ export class Rival {
     // допустимая скорость по кривизне впереди
     let target = this.top;
     const tmp = {};
-    for (let k = 3; k <= 70; k += 3) {
+    for (let k = 3; k <= 80; k += 3) {
       track.sample(this.fi + k, tmp);
       const kk = Math.abs(tmp.k);
       if (kk < 1e-4) continue;
       const vmax = Math.sqrt(this.mu * 9.81 / kk);
       const dist = k * SP;
-      target = Math.min(target, Math.sqrt(vmax * vmax + 2 * 7 * dist));
+      target = Math.min(target, Math.sqrt(vmax * vmax + 2 * 10 * dist)); // тормозят позже и резче
     }
     // резинка относительно игрока
     const gap = player.idx - this.fi; // >0 — соперник позади
     // «резинка» включается не сразу — на старте все разгоняются честно
-    if (gap > 0 && (player.t ?? 99) > 12) target *= 1 + Math.min(0.2, gap / 300);
-    else if (gap < -120) target *= 0.86;
-    if (this.bump > 0) { this.bump -= dt; target *= 0.7; }
-    const acc = 5.0 * (1 - 0.65 * Math.min(1, this.v / this.top)); // разгон слабеет с ростом скорости, как у настоящей машины
-    this.v += clamp(target - this.v, -9 * dt, acc * dt);
+    if (gap > 0 && (player.t ?? 99) > 8) target *= 1 + Math.min(0.25, gap / 250);
+    else if (gap < -160) target *= 0.9;
+    if (this.bump > 0) { this.bump -= dt; target *= 0.8; }
+    if (this.fi > this.stopAt) target = 0;
+    const acc = 8.0 * (1 - 0.55 * Math.min(1, this.v / this.top)); // резкий разгон, слабеет с ростом скорости
+    this.v += clamp(target - this.v, -13 * dt, acc * dt);
     this.v = Math.max(0, this.v);
 
     // смена полосы и объезд игрока
     this.laneTimer -= dt;
-    if (this.laneTimer <= 0) { this.targetD = (Math.random() * 2 - 1) * (hw - 1.8); this.laneTimer = 3 + Math.random() * 5; }
+    if (this.laneTimer <= 0) { this.targetD = (Math.random() * 2 - 1) * (hw - 1.8); this.laneTimer = 1.5 + Math.random() * 3; }
     const ahead = player.idx - this.fi;
-    if (ahead > 0 && ahead < 10 && Math.abs(player.lat - this.d) < 2.6) {
+    if (ahead > 0 && ahead < 16 && Math.abs(player.lat - this.d) < 2.8) {
       this.targetD = player.lat > 0 ? player.lat - 3.2 : player.lat + 3.2;
       this.targetD = clamp(this.targetD, -(hw - 1.4), hw - 1.4);
     }
@@ -55,7 +58,7 @@ export class Rival {
     track.sample(this.fi + 10, tmp);
     const inner = clamp(tmp.k * 400, -1, 1) * (hw - 2);
     const want = clamp(this.targetD * 0.6 + inner * 0.4, -(hw - 1.3), hw - 1.3);
-    this.dv += (clamp((want - this.d) * 1.6, -3, 3) - this.dv) * Math.min(1, dt * 3);
+    this.dv += (clamp((want - this.d) * 2.6, -5, 5) - this.dv) * Math.min(1, dt * 6); // шустрее перестраиваются
     this.d += this.dv * dt;
     this.d = clamp(this.d, -(hw - 1.1), hw - 1.1);
 
