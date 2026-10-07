@@ -50,6 +50,8 @@ export class Track {
     this.ahead = [8, AHEAD_CHUNKS, 16][this.draw] ?? AHEAD_CHUNKS;
     // finishIdx — индекс точки финиша (трасса заданной длины); Infinity — бесконечная трасса
     this.finishIdx = opts.finishIdx ?? Infinity;
+    // профиль трассы для особых режимов: 'drag' — идеально ровная прямая, 'hill' — затяжной спуск с горы (серпантин)
+    this.profile = opts.profile || '';
     this.rnd = mulberry32(seed * 9301 + 49297);
     this.hw = map.road.halfWidth;
     this.sh = map.road.shoulder;
@@ -77,6 +79,7 @@ export class Track {
     if (this.queue && this.queue.length) return this.queue.shift();
     const r = this.rnd, t = this.map.track, g = this.g;
     const straight = (L) => ({ type: 'straight', L, u: 0, k: 0, ramp: 1 });
+    if (this.profile === 'drag') return straight(1e7);
     // дуга: R — радиус, A — угол поворота; направление выбирается так, чтобы трасса не разворачивалась назад
     const curve = (R, A, dir, h0) => {
       if (Math.abs(h0 + dir * A * 0.75) > HMAX) dir = -dir;
@@ -87,7 +90,7 @@ export class Track {
     const dir0 = r() < 0.5 ? 1 : -1;
     const roll = r();
     // рельеф: иногда к повороту/прямой добавляется подъём, спуск или горб (подъём-спуск)
-    if (t.events !== false && g.s > 300 && !(g.ev && g.s < g.ev.s0 + g.ev.L) && r() < 0.38) this.planElevation();
+    if (t.events !== false && this.profile !== 'hill' && g.s > 300 && !(g.ev && g.s < g.ev.s0 + g.ev.L) && r() < 0.38) this.planElevation();
     if (r() < 0.12) {
       // резкий поворот: малый радиус, большой угол
       const c = curve(t.minR * (0.72 + r() * 0.25), 1.0 + r() * 0.6, dir0, g.h);
@@ -166,8 +169,15 @@ export class Track {
       g.lvl = g.ev.from + (g.ev.to - g.ev.from) * smooth(x);
       p.y += g.lvl + g.ev.crest * Math.sin(Math.PI * x) ** 2;
     }
+    if (this.profile === 'drag') p.y = 0; // драг: стол, ни одной кочки
+    if (this.profile === 'hill') {
+      // спуск: средний уклон ~7.5%, местами круче и положе; лёгкие волны поверх
+      const grade = 0.075 + 0.035 * (noise1(g.s * 0.0031, this.seed + 17) - 0.5) * 2;
+      g.hill = (g.hill || 0) - grade * SP * (g.s < 120 ? g.s / 120 : 1);
+      p.y = g.hill + (noise1(g.s * 0.021, this.seed + 5) - 0.5) * 1.2;
+    }
     // первые метры — ровная площадка старта
-    if (g.s < 120) p.y *= g.s / 120;
+    if (g.s < 120) p.y *= this.profile === 'hill' ? 1 : g.s / 120;
     // подъём всей трассы (например, над уровнем моря на «Ривьере»)
     if (this.map.track.base) p.y += this.map.track.base;
     this.pts.push(p);

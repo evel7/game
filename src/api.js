@@ -19,7 +19,8 @@
 //             (считает клиент; сервер только обрезает до пределов; в профиле stats.trusted = false)
 //   records — до 500 шт. [{ mode, map (id карты, напр. 'desert'), len (км, 0 = бесконечная), score, time (с, 0 = не финишировал), car }]
 //             сервер хранит лучший на (игрок, режим, карта, длина); improved = сколько рекордов улучшилось
-//   modeId: race | drift | free | time | elim | speed | clean | escape | field
+//   modeId: race | drift | free | time | elim | speed | clean | escape | field | drag | zones | slalom | hill | attack
+//   (drag: len = код дистанции 1/2/3 = 402/804/1609 м)
 // GET /api/save?token=… → { id, name, save, saveAt }          (восстановление на новом устройстве)
 // GET /api/me?token=…   → профиль (как /api/profile/:id)
 // GET /api/leaderboard?board=rating|wins|level|drift|speed|distance|mode[&mode=&map=&len=][&limit=50&offset=0][&around=<id>][&token=] →
