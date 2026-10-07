@@ -1794,25 +1794,81 @@ function bestRecordsList() {
   }
   return [...best.values()].slice(0, 500);
 }
-async function cloudSyncNow() {
+// статус облака для профиля: ok | saving | error | stale (в облаке прогресс новее)
+const sync = { state: '', error: '', cloudXp: 0 };
+const fmtCode = (t) => String(t || '').toUpperCase().replace(/[^0-9A-F]/g, '').match(/.{1,4}/g)?.join('-') || '';
+const normCode = (t) => String(t || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+const savePayload = () => ({ v: 2, profile: PG.profile, records, sel });
+async function cloudSyncNow({ force = false } = {}) {
   if (syncBusy || syncBlocked) return; syncBusy = true;
+  syncDirty = false; // изменения во время запроса снова поставят флаг
+  sync.state = 'saving'; refreshSyncInfo();
   try {
     api.setBase(apiBase(serverUrl()));
     const name = settings.name || 'Игрок';
-    if (!PG.profile.cloud) { const r = await api.register(name); PG.profile.cloud = { id: r.id, token: r.token }; PG.saveProfile(); }
-    const r = await api.sync({ token: PG.profile.cloud.token, name, save: { v: 2, profile: PG.profile, records, sel }, stats: PG.publicStats(), records: bestRecordsList() });
-    if (r && r.profile) { if (Number.isFinite(r.profile.rating)) PG.profile.rating = r.profile.rating; PG.profile.cloudAt = Date.now(); syncDirty = false; localStorage.setItem('ed_profile', JSON.stringify(PG.profile)); }
-    if (menuScreen === 'profile') renderProfile();
-  } catch (e) { /* сервер спит или недоступен — попробуем в следующий раз */ }
+    if (!PG.profile.cloud) { const r = await api.register(name); PG.profile.cloud = { id: r.id, token: r.token }; PG.saveProfile(); syncDirty = false; }
+    const body = { token: PG.profile.cloud.token, name, save: savePayload(), stats: PG.publicStats(), records: bestRecordsList(), force };
+    let r;
+    try { r = await api.sync(body); } catch (e) {
+      // сервер «забыл» аккаунт (базу пересоздали) — пересоздаём его с тем же кодом и заливаем локальный прогресс
+      if (e.status !== 401) throw e;
+      r = await api.sync({ ...body, recreate: true });
+    }
+    if (r && r.id && PG.profile.cloud.id !== r.id) PG.profile.cloud.id = r.id;
+    if (r && r.profile && Number.isFinite(r.profile.rating)) PG.profile.rating = r.profile.rating;
+    if (r && r.stale) { sync.state = 'stale'; sync.cloudXp = r.cloudXp || 0; }
+    else { sync.state = 'ok'; PG.profile.cloudAt = Date.now(); }
+    sync.error = '';
+    try { localStorage.setItem('ed_profile', JSON.stringify(PG.profile)); localStorage.setItem('ed_profile_bak', JSON.stringify(PG.profile)); } catch { /* приватный режим */ }
+  } catch (e) {
+    // сервер спит или недоступен — повторим (каждые 20 с, пока не получится)
+    syncDirty = true; sync.state = 'error'; sync.error = e.message || 'нет связи';
+  }
   syncBusy = false;
+  refreshSyncInfo();
 }
 let syncDirty = false, syncBlocked = false;
 function cloudSync() { if (syncBlocked) return; syncDirty = true; clearTimeout(syncTimer); syncTimer = setTimeout(cloudSyncNow, 1500); }
-// автосохранение в облако: после любого изменения прогресса, раз в минуту (если сервер спал) и при закрытии вкладки
+// при закрытии/сворачивании вкладки — последняя попытка, которая переживает закрытие страницы (sendBeacon)
+function beaconSync() {
+  if (!syncDirty || syncBlocked || !PG.profile.cloud || !navigator.sendBeacon) return false;
+  try {
+    const body = JSON.stringify({ token: PG.profile.cloud.token, name: settings.name || 'Игрок', save: savePayload(), stats: PG.publicStats(), records: bestRecordsList() });
+    if (body.length > 60000) return false; // лимит sendBeacon ~64 КБ — тогда обычный запрос
+    return navigator.sendBeacon(apiBase(serverUrl()) + '/api/sync', new Blob([body], { type: 'text/plain' }));
+  } catch { return false; }
+}
+// автосохранение в облако: через 1.5 с после любого изменения прогресса, повтор каждые 20 с, если не вышло,
+// контрольное сохранение раз в 2 минуты, при сворачивании/закрытии вкладки и при появлении сети
 PG.setOnSave(cloudSync);
-setInterval(() => { if (syncDirty && !syncBusy) cloudSyncNow(); }, 60000);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && syncDirty) cloudSyncNow(); });
-if (PG.profile.cloud && !PG.profile.cloudAt) cloudSync();
+setInterval(() => { if (syncDirty && !syncBusy) cloudSyncNow(); }, 20000);
+setInterval(() => { if (PG.profile.cloud && !syncBusy && !syncBlocked) cloudSyncNow(); }, 120000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && syncDirty) { if (!beaconSync()) cloudSyncNow(); } });
+window.addEventListener('pagehide', () => { if (syncDirty) beaconSync(); });
+window.addEventListener('online', () => { if (syncDirty || !PG.profile.cloudAt) cloudSyncNow(); });
+// при запуске: сверяемся с облаком (и пересоздаём аккаунт, если сервер его потерял)
+setTimeout(() => { if (PG.profile.cloud) cloudSyncNow(); }, 3000);
+function refreshSyncInfo() { const el = document.getElementById('pf-sync'); if (el) el.innerHTML = syncInfoHtml(); }
+function syncInfoHtml() {
+  const at = PG.profile.cloudAt ? new Date(PG.profile.cloudAt).toLocaleString('ru-RU') : '';
+  if (sync.state === 'saving') return '⏳ Сохраняем в облако…';
+  if (sync.state === 'stale') return `⚠ В облаке прогресс новее, чем на этом устройстве (${fmtN(sync.cloudXp)} XP против ${fmtN(PG.profile.xp)}). Облако не перезаписано. <button class="btn small" id="pf-pull">↓ Загрузить из облака</button> <button class="btn small" id="pf-push">↑ Оставить этот</button>`;
+  if (sync.state === 'error') return `⚠ Не удалось сохранить: ${escapeHtml(sync.error)}. Повторим автоматически${at ? ` · последнее сохранение: ${at}` : ''}.`;
+  return at ? `✓ Сохранено в облако: ${at}` : 'Ещё не сохранялось — сервер может просыпаться до минуты.';
+}
+// загрузить сохранение из облака по коду и перезапустить игру
+async function applyCloud(code, out) {
+  const r = await api.restore(code);
+  if (!r.save || !r.save.profile) throw new Error('В облаке нет сохранения для этого кода');
+  syncBlocked = true; clearTimeout(syncTimer); // не перетираем облако старым прогрессом перед перезагрузкой
+  const sv = r.save; sv.profile.cloud = { id: r.id, token: code }; sv.profile.cloudAt = Date.now();
+  localStorage.setItem('ed_profile', JSON.stringify(sv.profile)); localStorage.setItem('ed_profile_bak', JSON.stringify(sv.profile));
+  if (sv.records) store.set('records', sv.records);
+  if (sv.sel) store.set('sel', sv.sel);
+  if (r.name) { settings.name = r.name; saveSettings(); }
+  if (out) out('✓ Прогресс восстановлен, перезапускаем…');
+  location.reload();
+}
 
 // ---------- ежедневная награда ----------
 function showDaily() {
@@ -1849,36 +1905,39 @@ function renderProfile() {
     ${modes.length ? `<table class="ptable"><tr><th>Режим</th><th>Заезды</th><th>Победы</th><th>Лучший</th><th>Км</th></tr>${modes.map(([id, m]) => `<tr><td>${MODE_NAME(id)}</td><td>${m.races}</td><td>${m.wins}</td><td>${fmtN(m.best)}</td><td>${((m.dist || 0) / 1000).toFixed(1)}</td></tr>`).join('')}</table>` : '<p class="hint">Пока нет заездов.</p>'}
     ${hist.length ? `<h3>История онлайн-заездов</h3><table class="ptable"><tr><th>Режим</th><th>Карта</th><th>Место</th><th>Рейтинг</th></tr>${hist.slice(0, 15).map((h) => `<tr><td>${MODE_NAME(h.mode)}</td><td>${escapeHtml(MAPS[h.map] ? MAPS[h.map].name : String(h.map))}</td><td>${h.place}/${h.of}</td><td>${h.ratingDelta >= 0 ? '+' : ''}${h.ratingDelta} → ${h.rating}</td></tr>`).join('')}</table>` : ''}
     <h3>Сохранение прогресса</h3>
-    <p class="hint">Прогресс сохраняется в облако автоматически. ${PG.profile.cloudAt ? `Последнее сохранение: ${new Date(PG.profile.cloudAt).toLocaleString('ru-RU')}.` : 'Ещё не сохранялось — сервер может просыпаться до минуты.'} Запиши код восстановления — по нему прогресс возвращается на любом устройстве.</p>
+    <p class="hint">Прогресс сохраняется в облако автоматически. Запиши код восстановления — по нему прогресс возвращается на любом устройстве.</p>
+    <div class="hint" id="pf-sync">${syncInfoHtml()}</div>
     <div class="row wrap">
       <button class="btn small" id="pf-code">🔑 Код восстановления</button>
-      <button class="btn small" id="pf-restore">↺ Восстановить по коду</button>
+      <button class="btn small" id="pf-save">☁ Сохранить сейчас</button>
     </div>
+    <label class="opt">Восстановить по коду <input type="text" id="pf-restore-code" placeholder="XXXX-XXXX-…" autocomplete="off" autocapitalize="characters" spellcheck="false" /></label>
+    <div class="row wrap"><button class="btn small" id="pf-restore">↺ Восстановить</button></div>
     <div class="pf-out" id="pf-out"></div>`;
   $('pf-name').addEventListener('change', (e) => { settings.name = e.target.value.trim().slice(0, 16); saveSettings(); cloudSync(); });
   const out = (html) => { $('pf-out').innerHTML = html; };
   $('pf-code').addEventListener('click', async () => {
     if (!PG.profile.cloud) { out('Создаём облачный профиль…'); await cloudSyncNow(); }
-    out(PG.profile.cloud ? `Сохрани этот код — по нему прогресс восстанавливается на любом устройстве. Никому его не показывай:<textarea readonly>${PG.profile.cloud.token}</textarea>` : 'Сервер недоступен, попробуй позже');
+    out(PG.profile.cloud ? `Сохрани этот код — по нему прогресс восстанавливается на любом устройстве. Никому его не показывай:<textarea readonly rows="3">${fmtCode(PG.profile.cloud.token)}</textarea>` : `Сервер недоступен, попробуй позже${sync.error ? ` (${escapeHtml(sync.error)})` : ''}`);
   });
+  $('pf-save').addEventListener('click', async () => { out(''); await cloudSyncNow(); });
+  let pending = '';
   $('pf-restore').addEventListener('click', async () => {
-    const code = (prompt('Вставь код восстановления') || '').replace(/[\s-]/g, '');
-    if (!code) return;
-    out('Загружаем…');
-    try {
-      const r = await api.restore(code);
-      if (!r.save || !r.save.profile) throw new Error('В облаке нет сохранения');
-      if (!confirm('Заменить текущий прогресс сохранением из облака?')) { out(''); return; }
-      syncBlocked = true; clearTimeout(syncTimer); // не перетираем облако старым прогрессом перед перезагрузкой
-      const sv = r.save; sv.profile.cloud = { id: r.id, token: code }; sv.profile.cloudAt = Date.now();
-      localStorage.setItem('ed_profile', JSON.stringify(sv.profile)); localStorage.setItem('ed_profile_bak', JSON.stringify(sv.profile));
-      if (sv.records) store.set('records', sv.records);
-      if (sv.sel) store.set('sel', sv.sel);
-      if (r.name) { settings.name = r.name; saveSettings(); }
-      location.reload();
-    } catch (e) { out('⚠ ' + e.message); }
+    const code = normCode($('pf-restore-code').value);
+    if (!code) { out('Вставь код восстановления в поле выше'); return; }
+    if (code.length !== 64) { out(`⚠ Код неполный: в нём должно быть 64 символа (0–9, A–F), сейчас ${code.length}. Проверь, что скопировал целиком.`); return; }
+    // второе нажатие — подтверждение (без confirm(), он плохо работает на телефоне и в полноэкранном режиме)
+    if (pending !== code) { pending = code; out('Текущий прогресс на этом устройстве заменится сохранением из облака. Нажми «Восстановить» ещё раз, чтобы подтвердить.'); return; }
+    out('Загружаем… (сервер может просыпаться до минуты)');
+    try { await applyCloud(code, out); } catch (e) { pending = ''; out('⚠ ' + escapeHtml(e.message)); }
   });
 }
+// кнопки в статусе сохранения (перерисовывается без renderProfile) — один делегированный обработчик
+$('profile-body').addEventListener('click', async (e) => {
+  const out = (html) => { const el = document.getElementById('pf-out'); if (el) el.innerHTML = html; };
+  if (e.target.id === 'pf-pull') { try { out('Загружаем…'); await applyCloud(PG.profile.cloud.token, out); } catch (er) { out('⚠ ' + escapeHtml(er.message)); } }
+  if (e.target.id === 'pf-push') { out(''); await cloudSyncNow({ force: true }); }
+});
 async function loadRemoteProfile() {
   if (!PG.profile.cloud) return;
   try { remoteProfile = await api.profile(PG.profile.cloud.id); if (menuScreen === 'profile') renderProfile(); } catch { /* офлайн */ }

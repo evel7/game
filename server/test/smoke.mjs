@@ -236,6 +236,32 @@ try {
   ok(jD.players[0].rating === pA2.rating, 'WS link after restart');
   D.ws.close();
 
+  // ---- /api/health ----
+  const h = (await api('GET', '/api/health')).j;
+  ok(h.ok === true && h.store === 'file' && h.players >= 3 && h.dbConfigured === false, 'health: store + players');
+
+  // ---- защита от перезаписи старым прогрессом (stale) ----
+  const tokS = (await api('POST', '/api/register', { name: 'Stale' })).j.token;
+  await api('POST', '/api/sync', { token: tokS, save: { v: 2, profile: { xp: 500 } }, stats: { level: 5, xp: 500 } });
+  const st1 = (await api('POST', '/api/sync', { token: tokS, save: { v: 2, profile: { xp: 100 } }, stats: { level: 2, xp: 100 } })).j;
+  const sv3 = (await api('GET', `/api/save?token=${tokS}`)).j;
+  ok(st1.stale === true && sv3.save.profile.xp === 500 && st1.profile.level === 5, 'older save does not overwrite newer cloud save');
+  const st2 = (await api('POST', '/api/sync', { token: tokS, save: { v: 2, profile: { xp: 100 } }, stats: { level: 2, xp: 100 }, force: true })).j;
+  ok(st2.stale === false && (await api('GET', `/api/save?token=${tokS}`)).j.save.profile.xp === 100, 'force overwrites');
+
+  // ---- пересоздание потерянного аккаунта тем же токеном ----
+  const lost = 'ab'.repeat(32);
+  const r401 = await api('POST', '/api/sync', { token: lost, save: { v: 2, profile: { xp: 7 } } });
+  ok(r401.status === 401, 'unknown token without recreate → 401');
+  const rc = await api('POST', '/api/sync', { token: lost, name: 'Lost', recreate: true, save: { v: 2, profile: { xp: 7 } }, stats: { level: 1, xp: 7 } });
+  ok(rc.status === 200 && rc.j.recreated === true && rc.j.id, 'recreate with same token');
+  const rcode = lost.toUpperCase().match(/.{4}/g).join('-');
+  const rr = (await api('GET', `/api/save?token=${rcode}`)).j;
+  ok(rr.id === rc.j.id && rr.save.profile.xp === 7, 'old recovery code works after recreate');
+  const rc2 = (await api('POST', '/api/sync', { token: lost, recreate: true, save: { v: 2, profile: { xp: 9 } } })).j;
+  ok(rc2.recreated === false && rc2.id === rc.j.id, 'recreate does not duplicate existing account');
+  ok((await api('POST', '/api/sync', { token: 'zz', recreate: true, save: {} })).status === 401, 'bad token cannot recreate');
+
   console.log(`\nALL OK: ${passed} checks`);
 } catch (e) {
   console.error('\nFAILED:', e);
