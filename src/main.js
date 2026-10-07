@@ -18,6 +18,7 @@ import { clamp, lerp, fmtTime } from './utils.js';
 import { net, DEFAULT_SERVER } from './net.js';
 import * as PG from './progress.js';
 import { api, apiBase } from './api.js';
+import * as GH from './ghost.js';
 
 // ======================= режимы =======================
 const MODES = [
@@ -54,7 +55,7 @@ const store = {
 };
 const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 if (isTouch) document.body.classList.add('touch');
-const settings = Object.assign({ vol: 0.8, music: true, assist: true, manual: false, quality: isTouch ? 0 : 1, camera: 0, units: 'kmh', fps: 0, showFps: false, sfxVol: 0.8, musicVol: 0.3, easy: true, smoke: true, outline: true, autoRes: false, assistMode: 'all', draw: 1 }, store.get('settings', {}));
+const settings = Object.assign({ vol: 0.8, music: true, assist: true, manual: false, quality: isTouch ? 0 : 1, camera: 0, units: 'kmh', fps: 0, showFps: false, sfxVol: 0.8, musicVol: 0.3, easy: true, smoke: true, outline: true, autoRes: false, assistMode: 'all', draw: 1, ghost: true, photoFilter: 'none' }, store.get('settings', {}));
 // миграция: старая галочка «помощь» → режим помощи; авто-разрешение по умолчанию выключено (картинка мылилась)
 if (!settings.v3) { settings.v3 = 1; settings.autoRes = false; if (settings.assist === false) settings.assistMode = 'off'; }
 if (!settings.handling) settings.handling = settings.easy === false ? 'real' : 'easy';
@@ -518,14 +519,71 @@ function newGame(lenKm) {
   };
 }
 
+// ======================= призрак и повтор =======================
+const ghostKeyFor = (modeId, mapId, lenKm) => recKey(modeId, mapId, lenKm);
+// полупрозрачная копия машины из записи (свои материалы, без контуров и света фар)
+function buildGhostCar(g, opacity) {
+  const spec = CARS.find((c) => c.id === g.car) || CARS[0];
+  const model = buildCarModel(spec, g.color || spec.colors[0], { night: W.map.night, outline: opacity >= 1, look: g.look || {} });
+  model._tailBase = W.map.night ? 1.2 : 0.35;
+  if (opacity < 1) {
+    const cache = new Map();
+    model.root.traverse((o) => {
+      if (o.isLight) { o.visible = false; return; }
+      if (!o.isMesh || !o.material || o.material.isShaderMaterial) return;
+      if (!cache.has(o.material)) { const m = o.material.clone(); m.transparent = true; m.opacity = opacity * (o.material.transparent ? o.material.opacity : 1); m.depthWrite = false; cache.set(o.material, m); }
+      o.material = cache.get(o.material);
+    });
+    model.ghostMats = [...cache.values()];
+  }
+  W.group.add(model.root);
+  return model;
+}
+function placePoseModel(model, pose, dt) {
+  model.root.position.set(pose.x, pose.roadY + 0.03, pose.z);
+  model.root.rotation.set(-Math.atan(pose.slope || 0), pose.h, Math.atan(pose.roll || 0), 'YXZ');
+  pose.wheelSpin = (pose.wheelSpin || 0) + (pose.speed || 0) * dt / 0.33;
+  animateCar(model, pose, dt || 0.016, false);
+}
+function removeGhost() {
+  if (!W || !W.ghost) return;
+  W.group.remove(W.ghost.model.root); disposeModel(W.ghost.model); W.ghost = null;
+}
+function updateGhostCar(dt) {
+  const gh = W.ghost; if (!gh) return;
+  const pose = gh.pl.at(G.started ? G.elapsed : 0);
+  placePoseModel(gh.model, pose, dt);
+  // вблизи призрак почти прозрачный (не закрывает обзор), вдали — заметнее
+  const { veh } = W.player;
+  const d = Math.hypot(pose.x - veh.x, pose.z - veh.z);
+  const op = clamp((d - 2) / 18, 0.12, 0.45);
+  if (Math.abs(op - (gh.op ?? 0)) > 0.02) { gh.op = op; for (const m of gh.model.ghostMats || []) m.opacity = op; }
+  gh.model.root.visible = !(pose.done && d > 60);
+}
+// разница с призраком по времени на той же дистанции: < 0 — ты впереди
+function ghostDelta() {
+  if (!W.ghost || !G || !G.started) return null;
+  const tg = W.ghost.pl.timeAtDist(G.dist);
+  return tg === null ? null : G.elapsed - tg;
+}
+const fmtDelta = (d) => `${d <= 0 ? '−' : '+'}${Math.abs(d).toFixed(2)} с`;
+
 const finishIdxFor = (lenKm) => (lenKm > 0 ? 6 + Math.round(lenKm * 1000 / SP) : Infinity);
 function startRace(opts = {}) {
   audio.init();
   if (!opts.online) ensureOwnedCar();
   const lenKm = opts.len ?? (MAPS[sel.map].field ? 0 : sel.len);
-  buildWorld(sel.map, opts.seed ?? ((Math.random() * 1e6) | 0), { finishIdx: finishIdxFor(lenKm), fieldMode: opts.fieldMode });
+  // призрак лучшего заезда: едем по ТОЙ ЖЕ трассе (тот же seed), иначе сравнение нечестное
+  const gKey = ghostKeyFor(curMode().id, MAPS[sel.map].id, MAPS[sel.map].field ? 0 : lenKm);
+  const ghost = !opts.online && !MAPS[sel.map].field && settings.ghost && !opts.newTrack ? GH.loadGhost(gKey) : null;
+  const seed = opts.seed ?? (ghost ? ghost.seed : (Math.random() * 1e6) | 0);
+  buildWorld(sel.map, seed, { finishIdx: finishIdxFor(lenKm), fieldMode: opts.fieldMode });
   newGame(lenKm);
   G.online = !!opts.online;
+  G.seed = seed; G.gKey = gKey;
+  // запись заезда (для повтора и нового призрака); в онлайне и на полигоне не пишем
+  G.rec = !G.online && !W.track.isField ? new GH.Recorder({ key: gKey, seed, map: W.map.id, mode: G.mode.id, len: G.lenKm, car: CARS[sel.car].id, color: carColor(CARS[sel.car]), look: PG.lookOf(CARS[sel.car]), at: Date.now() }) : null;
+  if (ghost) { W.ghost = { pl: new GH.Player(ghost), model: buildGhostCar(ghost, 0.42), g: ghost }; }
   makeBackWall();
   // онлайн «с ботами»: свободные места занимают боты-призраки (у каждого игрока свои, на рейтинг не влияют)
   spawnRivals(G.online ? Math.min(opts.bots || 0, G.mode.rivals) : G.mode.rivals);
@@ -760,6 +818,8 @@ function updateRace(dt) {
     if (n === 24) G.acc = 0;
   }
   G.braking = inp.brake > 0.1 && veh.u > 0.5;
+  if (state === 'race' && G.rec) G.rec.push(G.elapsed, veh, G.dist);
+  updateGhostCar(dt);
 
   // соперники
   for (const r of W.rivals) if (!r.out) r.update(dt, track, { idx: veh.idx, lat: veh.lat, t: G.elapsed }, G.started);
@@ -956,6 +1016,10 @@ function finishRace(finished = false) {
   const isCarRec = !G.online && (timeRec ? finished && (!oldCar || !oldCar.time || G.elapsed < oldCar.time) : G.score > 0 && (!oldCar || G.score > oldCar.score));
   if (isCarRec) records[carKey] = entry;
   if (isRec || isCarRec) store.set('records', records);
+  // запись заезда: последний — для повтора, рекордный — новый призрак этой карты/режима/длины
+  const gdFin = ghostDelta();
+  G.lastRec = G.rec && G.rec.s.length ? G.rec.finish(G.elapsed, W.player.veh, G.dist, { time: finished ? G.elapsed : 0, score: G.score, dist: Math.floor(G.dist), finished }) : null;
+  if (G.lastRec && isRec) G.ghostSaved = GH.saveGhost(G.gKey, G.lastRec);
   let title = G.mode.timer && !G.finite ? 'Время вышло!' : 'Заезд окончен';
   if (finished) title = G.place ? `ФИНИШ! ${G.place} место` : 'ФИНИШ!';
   if (G.elimWin) title = 'ПОБЕДА! Ты остался один';
@@ -981,6 +1045,8 @@ function finishRace(finished = false) {
   if (G.mode.id === 'elim') rows.push(['Выбыло соперников', G.elimCount]);
   if (G.mode.id === 'escape') rows.push(['Скорость стены', speedStr(G.wallV * 3.6)]);
   rows.push(['Удары', G.hits]);
+  if (W.ghost && gdFin !== null) rows.push(['👻 Против призрака', gdFin <= 0 ? `<span class="rw">быстрее на ${Math.abs(gdFin).toFixed(2)} с</span>` : `медленнее на ${gdFin.toFixed(2)} с`]);
+  if (G.ghostSaved) rows.push(['👻 Призрак', 'этот заезд — новый призрак рекорда']);
   const fmtN = (n) => n.toLocaleString('ru-RU');
   rows.push(['Награда', `<span class="rw">+${fmtN(rw.coins)} 💰 · +${fmtN(rw.xp)} XP</span>`]);
   for (const [n, c, x] of rw.lines) rows.push([`<small>${n}</small>`, `<small>+${fmtN(c)} 💰 · +${fmtN(x)} XP</small>`]);
@@ -995,6 +1061,7 @@ function finishRace(finished = false) {
   if (G.online) net.finish(finished, G.elapsed, G.score);
   renderOnlineResults();
   $('touch').classList.add('hidden');
+  $('btn-replay').classList.toggle('hidden', !G.lastRec);
   setTimeout(() => { if (state === 'over') showScreen('over'); }, 900);
   cam.mode = 3; cam.cineT = 0;
 }
@@ -1152,6 +1219,9 @@ function updateHUD(dt) {
   setText('hud-dist', `${(G.dist / 1000).toFixed(2)} км${G.finite ? ` из ${G.lenKm}` : ''}${isPlaceMode(G.mode) && !G.online ? ` · обгонов: ${G.overtakes}` : ''}${placeStr}`);
   const rec = records[recKey(G.mode.id, W.map.id, G.lenKm)];
   const timeRec = byTime(G.mode.id, G.lenKm);
+  const gd = ghostDelta(), gEl = $('hud-ghost');
+  gEl.classList.toggle('hidden', !W.ghost);
+  if (W.ghost) { setText('hud-ghost', gd === null ? (G.started ? '👻 призрак позади' : '👻 призрак рекорда') : `👻 ${fmtDelta(gd)}`); gEl.classList.toggle('ahead', gd !== null && gd <= 0); gEl.classList.toggle('behind', gd !== null && gd > 0); }
   setText('hud-sub', rec ? (timeRec ? `рекорд: ${rec.time ? fmtTime(rec.time) : '—'}` : `рекорд: ${rec.score.toLocaleString('ru-RU')}`) : 'рекорда пока нет');
   // дрифт
   const dEl = $('hud-drift');
@@ -1225,12 +1295,30 @@ function renderSetup() {
   }).join('');
   renderSetupOpts(fieldSel);
   $('setup-car-name').textContent = CARS[sel.car].name;
+  renderSetupGhost(fieldSel);
   document.querySelectorAll('[data-mode]').forEach((el) => el.addEventListener('click', () => { sel.mode = +el.dataset.mode; saveSel(); audio.click(); renderSetup(); }));
   document.querySelectorAll('[data-map]').forEach((el) => el.addEventListener('click', () => {
     const m = +el.dataset.map; audio.click();
     if (m !== sel.map) { sel.map = m; saveSel(); buildWorld(sel.map, 7); }
     renderSetup();
   }));
+}
+// призрак рекорда для выбранных режима/карты/длины: повтор, заезд по новой трассе, удаление
+function renderSetupGhost(fieldSel) {
+  const box = $('setup-ghost');
+  if (fieldSel) { box.innerHTML = ''; return; }
+  const key = ghostKeyFor(MODES[sel.mode].id, MAPS[sel.map].id, sel.len);
+  const g = GH.hasGhost(key) ? GH.loadGhost(key) : null;
+  if (!g) { box.innerHTML = '<span>👻 Поставь рекорд здесь — появится призрак твоего лучшего заезда.</span>'; return; }
+  const res = g.finished && g.time && byTime(g.mode, g.len) ? fmtTime(g.time) : `${(g.score || 0).toLocaleString('ru-RU')} очк.`;
+  const car = (CARS.find((c) => c.id === g.car) || { name: g.car }).name;
+  box.innerHTML = `<span>👻 Призрак рекорда: <b>${res}</b> · ${escapeHtml(car)}${settings.ghost ? ' — заезд по той же трассе' : ' (выключен в настройках)'}</span>
+    <button class="btn small" id="sg-replay">🎬 Повтор</button>
+    ${settings.ghost ? '<button class="btn small" id="sg-new">🔀 Новая трасса без призрака</button>' : ''}
+    <button class="btn small" id="sg-del">🗑</button>`;
+  $('sg-replay').addEventListener('click', () => { audio.click(); startReplay(g, 'setup'); });
+  if ($('sg-new')) $('sg-new').addEventListener('click', () => { audio.click(); startRace({ newTrack: true }); });
+  $('sg-del').addEventListener('click', () => { audio.click(); if (confirm('Удалить призрака этого рекорда?')) { GH.deleteGhost(key); renderSetupGhost(false); } });
 }
 // длина трассы (для трасс) или вид полигона (для полигонов)
 function renderSetupOpts(fieldSel) {
@@ -1503,6 +1591,7 @@ function renderSettings() {
   $('set-sfx').value = settings.sfxVol; $('set-musicvol').value = settings.musicVol;
   $('set-handling').value = settings.handling; $('set-smoke').checked = settings.smoke;
   $('set-fps').value = settings.fps; $('set-showfps').checked = settings.showFps; $('set-autores').checked = settings.autoRes;
+  $('set-ghost').checked = !!settings.ghost;
 }
 $('set-vol').addEventListener('input', (e) => { settings.vol = +e.target.value; audio.setVolume(settings.vol); saveSettings(); });
 $('set-sfx').addEventListener('input', (e) => { settings.sfxVol = +e.target.value; audio.setSfxVol(settings.sfxVol); saveSettings(); });
@@ -1528,6 +1617,7 @@ $('set-camera').addEventListener('change', (e) => { settings.camera = +e.target.
 $('set-units').addEventListener('change', (e) => { settings.units = e.target.value; saveSettings(); });
 $('set-fps').addEventListener('change', (e) => { settings.fps = +e.target.value; saveSettings(); });
 $('set-showfps').addEventListener('change', (e) => { settings.showFps = e.target.checked; saveSettings(); });
+$('set-ghost').addEventListener('change', (e) => { settings.ghost = e.target.checked; saveSettings(); });
 $('set-autores').addEventListener('change', (e) => { settings.autoRes = e.target.checked; saveSettings(); dynRes.scale = 1; applyPixelRatio(); });
 
 // ======================= онлайн: подключение и лобби =======================
@@ -2010,6 +2100,292 @@ async function openPlayer(id) {
 }
 $('pv-close').addEventListener('click', () => { audio.click(); $('player-view').classList.add('hidden'); });
 
+// ======================= повтор заезда (Replay) =======================
+const RP = { pl: null, model: null, t: 0, speed: 1, paused: false, from: 'over', cam: 0, ch: 0, tv: null, rec: null, sliding: false };
+const RP_CAMS = ['Камера: сзади', 'Камера: кино', 'Камера: ТВ-трансляция', 'Камера: сверху'];
+function replayWorld(rec) {
+  const mi = Math.max(0, MAPS.findIndex((m) => m.id === rec.map));
+  buildWorld(mi, rec.seed, { finishIdx: finishIdxFor(rec.len) });
+  W.player.model.root.visible = false; // машина из записи может отличаться от выбранной
+  RP.model = buildGhostCar(rec, 1);
+}
+function startReplay(rec, from) {
+  if (!rec || !rec.s || !rec.s.length) return;
+  audio.init(); audio.silence();
+  RP.rec = rec; RP.from = from; RP.pl = new GH.Player(rec); RP.t = 0; RP.speed = 1; RP.paused = false; RP.cam = 0; RP.tv = null;
+  if (from === 'over' && G) G.replaying = true;
+  replayWorld(rec);
+  state = 'replay';
+  for (const s of SCREENS) $('menu-' + s).classList.remove('show');
+  $('hud').classList.add('hidden'); $('touch').classList.add('hidden'); $('garage-info').classList.add('hidden');
+  $('countdown').textContent = '';
+  viewShift = { x: 0, y: 0 }; updateViewOffset(); camera.updateProjectionMatrix();
+  $('rp-seek').max = RP.pl.duration.toFixed(2);
+  $('rp-title').textContent = `🎬 Повтор · ${MAP_NAME(rec.map)} · ${MODE_NAME(rec.mode)}${rec.len ? ` · ${rec.len} км` : ''} · ${(CARS.find((c) => c.id === rec.car) || CARS[0]).name}`;
+  $('replay-bar').classList.remove('hidden');
+  renderReplayBar();
+  updateReplay(0, true);
+}
+function exitReplay() {
+  $('replay-bar').classList.add('hidden');
+  if (W && RP.model) { W.group.remove(RP.model.root); disposeModel(RP.model); }
+  RP.model = null; RP.pl = null;
+  if (RP.from === 'over' && G) {
+    // мир пересобран для повтора — возвращаемся к итогам заезда
+    W.player.model.root.visible = true;
+    state = 'over'; cam.mode = 3; cam.cineT = 0;
+    showScreen('over');
+  } else {
+    showScreen(RP.from === 'setup' ? 'setup' : 'records');
+  }
+  last = performance.now();
+}
+function seekReplay(t) {
+  t = clamp(t, 0, RP.pl.duration);
+  const p = RP.pl.at(t);
+  // трасса позади удаляется — для перемотки назад строим её заново
+  if (p.idx < W.track.base + 4) { W.group.remove(RP.model.root); disposeModel(RP.model); replayWorld(RP.rec); }
+  RP.t = t; RP.tv = null;
+  updateReplay(0, true);
+}
+function renderReplayBar() {
+  $('rp-play').textContent = RP.paused ? '▶' : '⏸';
+  $('rp-speed').textContent = `×${RP.speed}`;
+  $('rp-cam').textContent = '🎥 ' + RP_CAMS[RP.cam].replace('Камера: ', '');
+}
+function updateReplay(dt, instant = false) {
+  if (!RP.pl) return;
+  if (!RP.paused && !RP.sliding) RP.t += dt * RP.speed;
+  if (RP.t >= RP.pl.duration) { RP.t = RP.pl.duration; if (!RP.paused) { RP.paused = true; renderReplayBar(); } }
+  const p = RP.pl.at(RP.t);
+  W.track.update(p.idx);
+  placePoseModel(RP.model, p, dt * RP.speed);
+  const d = W.sunDir;
+  W.sun.position.set(p.x + d.x * 90, p.roadY + d.y * 90, p.z + d.z * 90);
+  W.sun.target.position.set(p.x, p.roadY, p.z);
+  W.farPlane.position.set(p.x, p.roadY - 14, p.z);
+  if (W.snow) W.snow.update(dt, camera);
+  replayCamera(dt, p, instant);
+  W.sky.position.copy(camera.position);
+  if (!RP.sliding) $('rp-seek').value = RP.t.toFixed(2);
+  setText('rp-time', `${fmtTime(RP.t)} / ${fmtTime(RP.pl.duration)} · ${speedStr(p.speed * 3.6)}`);
+}
+function replayCamera(dt, p, instant) {
+  const fx = Math.sin(p.h), fz = Math.cos(p.h);
+  const k = instant ? 1 : 1 - Math.exp(-dt * 6);
+  let fov = 58;
+  if (RP.cam === 0) { // сзади (как в заезде)
+    RP.ch = instant ? p.h : RP.ch + angDiff(p.h, RP.ch) * k;
+    camera.position.set(p.x - Math.sin(RP.ch) * 5.6, p.roadY + 2.0, p.z - Math.cos(RP.ch) * 5.6);
+    camera.lookAt(p.x + fx * 2.5, p.roadY + 1.0, p.z + fz * 2.5);
+    fov = 60 + Math.min(9, p.speed * 0.12);
+  } else if (RP.cam === 1) { // кино: облёт с разных сторон
+    cam.cineT -= dt;
+    if (cam.cineT <= 0 || instant) { cam.cineT = 3.5 + Math.random() * 3; cam.cineA = (Math.random() * 2 - 1) * 2.4; cam.cineD = 6 + Math.random() * 6; cam.cineH = 0.6 + Math.random() * 3; }
+    const a = p.h + Math.PI + cam.cineA;
+    const des = new THREE.Vector3(p.x + Math.sin(a) * cam.cineD, p.roadY + cam.cineH, p.z + Math.cos(a) * cam.cineD);
+    if (instant) camera.position.copy(des); else camera.position.lerp(des, 1 - Math.exp(-dt * 2.5));
+    camera.lookAt(p.x, p.roadY + 0.8, p.z);
+    fov = 52;
+  } else if (RP.cam === 2) { // ТВ: камера стоит у дороги и провожает машину, потом переставляется вперёд
+    const dist = RP.tv ? Math.hypot(RP.tv.x - p.x, RP.tv.z - p.z) : Infinity;
+    const passed = RP.tv && ((RP.tv.x - p.x) * fx + (RP.tv.z - p.z) * fz) < -25;
+    if (!RP.tv || dist > 140 || passed) {
+      const ahead = p.idx + Math.round((45 + Math.random() * 35) / SP);
+      W.track.ensure(ahead + 2);
+      const q = W.track.P(ahead), side = Math.random() < 0.5 ? 1 : -1, off = W.track.hw + 4 + Math.random() * 5;
+      RP.tv = { x: q.x + (q.lx || 0) * off * side, z: q.z + (q.lz || 0) * off * side, y: q.y + 1.6 + Math.random() * 2.5 };
+    }
+    camera.position.set(RP.tv.x, RP.tv.y, RP.tv.z);
+    camera.lookAt(p.x, p.roadY + 0.7, p.z);
+    fov = clamp(2400 / Math.max(8, Math.hypot(RP.tv.x - p.x, RP.tv.z - p.z)) , 14, 60);
+  } else { // сверху
+    RP.ch = instant ? p.h : RP.ch + angDiff(p.h, RP.ch) * k * 0.5;
+    camera.position.set(p.x - Math.sin(RP.ch) * 6, p.roadY + 22, p.z - Math.cos(RP.ch) * 6);
+    camera.lookAt(p.x + fx * 4, p.roadY, p.z + fz * 4);
+    fov = 55;
+  }
+  camera.fov += (fov - camera.fov) * (instant ? 1 : Math.min(1, dt * 3));
+  camera.updateProjectionMatrix();
+}
+$('rp-play').addEventListener('click', () => { audio.click(); if (RP.t >= RP.pl.duration) seekReplay(0); RP.paused = !RP.paused; renderReplayBar(); });
+$('rp-restart').addEventListener('click', () => { audio.click(); seekReplay(0); RP.paused = false; renderReplayBar(); });
+$('rp-speed').addEventListener('click', () => { audio.click(); const S = [0.25, 0.5, 1, 2, 4]; RP.speed = S[(S.indexOf(RP.speed) + 1) % S.length]; renderReplayBar(); });
+$('rp-cam').addEventListener('click', () => { audio.click(); RP.cam = (RP.cam + 1) % RP_CAMS.length; RP.tv = null; renderReplayBar(); updateReplay(0, true); });
+$('rp-photo').addEventListener('click', () => { audio.click(); RP.paused = true; renderReplayBar(); enterPhoto(); });
+$('rp-exit').addEventListener('click', () => { audio.click(); exitReplay(); });
+$('rp-seek').addEventListener('input', (e) => { RP.sliding = true; seekReplay(+e.target.value); });
+$('rp-seek').addEventListener('change', () => { RP.sliding = false; });
+$('btn-replay').addEventListener('click', () => { audio.click(); if (G && G.lastRec) startReplay(G.lastRec, 'over'); });
+
+// ======================= фоторежим =======================
+// свободная камера (или облёт машины), скрытие интерфейса, фильтры и снимок экрана в PNG
+const PH = { prev: null, prevScreen: null, mode: 'orbit', yaw: 0, pitch: 0.2, r: 6, fov: 50, roll: 0, target: new THREE.Vector3(), pos: new THREE.Vector3(), look: { yaw: 0, pitch: 0 }, ui: true };
+const PH_FILTERS = { none: 'Без фильтра', vivid: 'Сочный', bw: 'Ч/Б', sepia: 'Сепия', cold: 'Холодный', warm: 'Тёплый', noir: 'Нуар' };
+const PH_CSS = { none: '', vivid: 'saturate(1.45) contrast(1.08)', bw: 'grayscale(1) contrast(1.1)', sepia: 'sepia(0.85) contrast(1.05)', cold: 'saturate(1.1) hue-rotate(-12deg) brightness(1.03)', warm: 'sepia(0.3) saturate(1.3) hue-rotate(-8deg)', noir: 'grayscale(1) contrast(1.6) brightness(0.9)' };
+function photoSubject() {
+  if (state === 'replay' && RP.model) return RP.model.root.position;
+  if (W && W.player) return W.player.model.root.position;
+  return new THREE.Vector3();
+}
+function enterPhoto() {
+  if (!W || state === 'photo') return;
+  PH.prev = state; PH.prevScreen = menuScreen;
+  PH.target.copy(photoSubject()); PH.target.y += 0.6;
+  // начинаем с текущего вида камеры
+  const off = camera.position.clone().sub(PH.target);
+  PH.r = clamp(off.length(), 2.5, 30); PH.yaw = Math.atan2(off.x, off.z); PH.pitch = clamp(Math.asin(off.y / (off.length() || 1)), -0.1, 1.45);
+  PH.pos.copy(camera.position);
+  const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
+  PH.look.yaw = Math.atan2(dir.x, dir.z); PH.look.pitch = Math.asin(clamp(dir.y, -1, 1));
+  PH.fov = camera.fov; PH.roll = 0;
+  state = 'photo';
+  for (const s of SCREENS) $('menu-' + s).classList.remove('show');
+  $('hud').classList.add('hidden'); $('touch').classList.add('hidden'); $('garage-info').classList.add('hidden'); $('replay-bar').classList.add('hidden');
+  viewShift = { x: 0, y: 0 }; updateViewOffset(); camera.updateProjectionMatrix();
+  document.body.classList.add('photo');
+  $('photo-bar').classList.remove('hidden'); PH.ui = true;
+  $('ph-fov').value = Math.round(PH.fov); $('ph-roll').value = 0;
+  $('ph-filter').innerHTML = Object.entries(PH_FILTERS).map(([k, n]) => `<option value="${k}" ${k === settings.photoFilter ? 'selected' : ''}>${n}</option>`).join('');
+  canvas.style.filter = PH_CSS[settings.photoFilter] || '';
+  renderPhotoBar();
+}
+function exitPhoto() {
+  if (state !== 'photo') return;
+  document.body.classList.remove('photo');
+  $('photo-bar').classList.add('hidden'); $('ph-show').classList.add('hidden');
+  canvas.style.filter = '';
+  state = PH.prev;
+  if (state === 'paused') { $('menu-pause').classList.add('show'); menuScreen = 'pause'; updateCamera(0.016, true); }
+  else if (state === 'replay') { $('replay-bar').classList.remove('hidden'); updateReplay(0, true); }
+  else if (state === 'over') showScreen('over');
+  else if (state === 'menu') { showScreen(PH.prevScreen || 'garage'); }
+  last = performance.now();
+}
+function renderPhotoBar() {
+  $('ph-mode').textContent = PH.mode === 'orbit' ? '🔄 Облёт машины' : '🕹 Свободная камера';
+  $('ph-help').textContent = PH.mode === 'orbit'
+    ? (isTouch ? 'Тяни пальцем — вращать, щипок — приблизить' : 'Мышь — вращать, колесо — приблизить, H — скрыть панель, Esc — выход')
+    : (isTouch ? 'Тяни пальцем — смотреть, щипок — лететь вперёд/назад' : 'WASD/стрелки — лететь, E/Q — вверх/вниз, Shift — быстрее, мышь — смотреть, H — скрыть панель');
+}
+function setPhotoUI(on) { PH.ui = on; $('photo-bar').classList.toggle('hidden', !on); $('ph-show').classList.toggle('hidden', on); }
+function updatePhoto(dt) {
+  if (PH.mode === 'orbit') {
+    const cp = Math.cos(PH.pitch);
+    camera.position.set(PH.target.x + Math.sin(PH.yaw) * PH.r * cp, PH.target.y + Math.sin(PH.pitch) * PH.r, PH.target.z + Math.cos(PH.yaw) * PH.r * cp);
+    const minY = (W.track.isField ? W.track.heightAt(camera.position.x, camera.position.z) : PH.target.y - 0.6) + 0.15;
+    if (camera.position.y < minY) camera.position.y = minY;
+    camera.up.set(0, 1, 0);
+    camera.lookAt(PH.target);
+  } else {
+    const k = input.down('ShiftLeft', 'ShiftRight') ? 24 : 8;
+    const f = new THREE.Vector3(Math.sin(PH.look.yaw) * Math.cos(PH.look.pitch), Math.sin(PH.look.pitch), Math.cos(PH.look.yaw) * Math.cos(PH.look.pitch));
+    const r = new THREE.Vector3(-Math.cos(PH.look.yaw), 0, Math.sin(PH.look.yaw));
+    const mv = new THREE.Vector3();
+    if (input.down('KeyW', 'ArrowUp')) mv.add(f); if (input.down('KeyS', 'ArrowDown')) mv.sub(f);
+    if (input.down('KeyD', 'ArrowRight')) mv.add(r); if (input.down('KeyA', 'ArrowLeft')) mv.sub(r);
+    if (input.down('KeyE', 'Space')) mv.y += 1; if (input.down('KeyQ', 'KeyC')) mv.y -= 1;
+    if (mv.lengthSq()) PH.pos.addScaledVector(mv.normalize(), k * dt);
+    // не даём улететь далеко от машины (трасса вокруг дальше не построена)
+    const off = PH.pos.clone().sub(PH.target); if (off.length() > 120) PH.pos.copy(PH.target).addScaledVector(off.normalize(), 120);
+    camera.position.copy(PH.pos);
+    camera.up.set(0, 1, 0);
+    camera.lookAt(PH.pos.clone().add(f));
+  }
+  if (PH.roll) camera.rotateZ(PH.roll);
+  camera.fov = PH.fov; camera.updateProjectionMatrix();
+  if (W.snow) W.snow.update(dt * 0.25, camera);
+  W.sky.position.copy(camera.position);
+}
+{
+  const pts = new Map(); let pinch = 0, moved = 0;
+  canvas.addEventListener('pointerdown', (e) => { if (state !== 'photo') return; pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); canvas.setPointerCapture(e.pointerId); moved = 0; });
+  canvas.addEventListener('pointermove', (e) => {
+    const p = pts.get(e.pointerId); if (!p || state !== 'photo') return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y; moved += Math.abs(dx) + Math.abs(dy);
+    if (pts.size === 1) {
+      if (PH.mode === 'orbit') { PH.yaw -= dx * 0.008; PH.pitch = clamp(PH.pitch + dy * 0.006, -0.05, 1.45); }
+      else { PH.look.yaw -= dx * 0.004; PH.look.pitch = clamp(PH.look.pitch - dy * 0.004, -1.5, 1.5); }
+    }
+    p.x = e.clientX; p.y = e.clientY;
+    if (pts.size === 2) {
+      const [a, b] = [...pts.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinch) {
+        if (PH.mode === 'orbit') PH.r = clamp(PH.r * pinch / d, 2, 40);
+        else { const f = new THREE.Vector3(Math.sin(PH.look.yaw) * Math.cos(PH.look.pitch), Math.sin(PH.look.pitch), Math.cos(PH.look.yaw) * Math.cos(PH.look.pitch)); PH.pos.addScaledVector(f, (d - pinch) * 0.05); }
+      }
+      pinch = d;
+    }
+  });
+  const up = (e) => {
+    if (state === 'photo' && pts.size === 1 && moved < 6 && !PH.ui) setPhotoUI(true); // тап по экрану возвращает панель
+    pts.delete(e.pointerId); if (pts.size < 2) pinch = 0;
+  };
+  canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
+  canvas.addEventListener('wheel', (e) => {
+    if (state !== 'photo') return; e.preventDefault();
+    if (PH.mode === 'orbit') PH.r = clamp(PH.r * Math.exp(e.deltaY * 0.0012), 2, 40);
+    else { PH.fov = clamp(PH.fov * Math.exp(e.deltaY * 0.0008), 15, 100); $('ph-fov').value = Math.round(PH.fov); }
+  }, { passive: false });
+  addEventListener('keydown', (e) => {
+    if (state !== 'photo' || (e.target && e.target.tagName === 'INPUT')) return;
+    if (e.code === 'KeyH') setPhotoUI(!PH.ui);
+    if (e.code === 'KeyF' || e.code === 'F12') { e.preventDefault(); takePhoto(); }
+  });
+}
+// снимок: рендерим кадр в повышенном разрешении (до 2x, не больше 4K по ширине), применяем фильтр и скачиваем PNG
+function takePhoto() {
+  const oldPR = renderer.getPixelRatio();
+  const pr = Math.min(oldPR * 2, Math.max(oldPR, 3840 / innerWidth));
+  try {
+    if (pr > oldPR + 0.01) { renderer.setPixelRatio(pr); resize(); }
+    if (composer && W.map.night) composer.render(); else renderer.render(scene, camera);
+    const src = renderer.domElement;
+    const out = document.createElement('canvas'); out.width = src.width; out.height = src.height;
+    const ctx = out.getContext('2d');
+    ctx.filter = PH_CSS[settings.photoFilter] || 'none';
+    ctx.drawImage(src, 0, 0);
+    ctx.filter = 'none';
+    // небольшая подпись в углу
+    const fs = Math.round(out.height * 0.022);
+    ctx.font = `700 ${fs}px Segoe UI, Arial`; ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.textAlign = 'right';
+    ctx.fillText('ENDLESS DRIFT', out.width - fs, out.height - fs);
+    out.toBlob((blob) => {
+      if (!blob) return;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `endless-drift-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.png`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    }, 'image/png');
+    const fl = $('ph-flash'); fl.classList.remove('go'); void fl.offsetWidth; fl.classList.add('go');
+    audio.click();
+  } finally {
+    if (pr > oldPR + 0.01) { renderer.setPixelRatio(oldPR); resize(); }
+  }
+}
+$('ph-shot').addEventListener('click', () => takePhoto());
+$('ph-mode').addEventListener('click', () => {
+  audio.click();
+  if (PH.mode === 'orbit') { // свободная камера стартует из текущего вида
+    PH.mode = 'free'; PH.pos.copy(camera.position);
+    const dir = new THREE.Vector3(); camera.getWorldDirection(dir); PH.look.yaw = Math.atan2(dir.x, dir.z); PH.look.pitch = Math.asin(clamp(dir.y, -1, 1));
+  } else {
+    PH.mode = 'orbit'; const off = camera.position.clone().sub(PH.target);
+    PH.r = clamp(off.length(), 2, 40); PH.yaw = Math.atan2(off.x, off.z); PH.pitch = clamp(Math.asin(off.y / (off.length() || 1)), -0.05, 1.45);
+  }
+  renderPhotoBar();
+});
+$('ph-fov').addEventListener('input', (e) => { PH.fov = +e.target.value; });
+$('ph-roll').addEventListener('input', (e) => { PH.roll = +e.target.value * Math.PI / 180; });
+$('ph-filter').addEventListener('change', (e) => { settings.photoFilter = e.target.value; saveSettings(); canvas.style.filter = PH_CSS[settings.photoFilter] || ''; });
+$('ph-hide').addEventListener('click', () => setPhotoUI(false));
+$('ph-show').addEventListener('click', () => setPhotoUI(true));
+$('ph-exit').addEventListener('click', () => { audio.click(); exitPhoto(); });
+$('btn-photo').addEventListener('click', () => { audio.click(); enterPhoto(); });
+$('btn-over-photo').addEventListener('click', () => { audio.click(); enterPhoto(); });
+$('btn-garage-photo').addEventListener('click', () => { audio.click(); enterPhoto(); });
+
 // пауза / итоги
 function pause() { if (state !== 'race' && state !== 'countdown') return; G.prevState = state; state = 'paused'; showScreen('pause'); audio.update(W.player.veh, W.player.veh.spec, 0, 0, false, 0, false); }
 function resume() { if (state !== 'paused') return; state = G.prevState; showScreen(null); last = performance.now(); }
@@ -2025,6 +2401,12 @@ $('btn-over-menu').addEventListener('click', () => { audio.click(); const on = G
 
 function handleEvents(evs) {
   for (const e of evs) {
+    if (state === 'photo') { if (e === 'pause') exitPhoto(); continue; }
+    if (state === 'replay') {
+      if (e === 'pause') exitReplay();
+      if (e === 'camera') $('rp-cam').click();
+      continue;
+    }
     if (e === 'mute') { audio.setVolume(audio.volume > 0 ? 0 : settings.vol); }
     if (e === 'pause') { if (state === 'paused') resume(); else pause(); }
     if (state === 'race' || state === 'countdown') {
@@ -2091,6 +2473,8 @@ function frame(now) {
     G._events = evs;
     updateRace(dt);
   }
+  else if (state === 'replay') updateReplay(dt);
+  else if (state === 'photo') updatePhoto(dt);
   updateDynRes(dt);
   freezeStatic();
   // свечение (bloom) заметно только ночью: днём рисуем напрямую, без лишних проходов постобработки

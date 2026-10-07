@@ -38,6 +38,7 @@
     <div id="setup-opts"></div>
     <div class="setup-bottom">
       <div class="setup-car">Машина: <b id="setup-car-name"></b> <button class="btn small" data-go="garage">сменить</button></div>
+      <div class="setup-ghost" id="setup-ghost"></div>
       <div class="row">
         <button class="btn" data-go="main">← Назад</button>
         <button class="btn big accent" id="btn-start">СТАРТ</button>
@@ -54,6 +55,7 @@
     <div class="row">
       <button class="btn" data-go="main">← Меню</button>
       <button class="btn" data-insp="on">👁 Осмотр</button>
+      <button class="btn" id="btn-garage-photo">📷 Фото</button>
       <button class="btn accent" data-go="setup">Выбрать ✓</button>
     </div>
   </div>
@@ -168,6 +170,7 @@
     </label>
     <label class="opt">Показывать FPS <input type="checkbox" id="set-showfps" /></label>
     <label class="opt">Авто-разрешение (держать FPS) <input type="checkbox" id="set-autores" /></label>
+    <label class="opt">Призрак рекорда (заезд по той же трассе) <input type="checkbox" id="set-ghost" /></label>
     <label class="opt">Спидометр <select id="set-units"><option value="kmh">км/ч</option><option value="mph">mph</option></select></label>
     <div class="row"><button class="btn" data-go="main">← Меню</button></div>
   </div>
@@ -263,6 +266,7 @@
     <div class="hud-tc">
       <div class="hud-timer" id="hud-timer"></div>
       <div class="hud-next" id="hud-next"></div>
+      <div class="hud-ghost hidden" id="hud-ghost"></div>
     </div>
     <div class="hud-tr">
       <div class="hud-score" id="hud-score">0</div>
@@ -274,6 +278,37 @@
     <div class="gauge"><canvas id="gauge" width="220" height="220"></canvas></div>
     <div class="cam-hint" id="cam-hint"></div>
   </div>
+
+  <!-- ===== Повтор заезда ===== -->
+  <div id="replay-bar" class="replay-bar hidden">
+    <div class="rp-title" id="rp-title"></div>
+    <input type="range" id="rp-seek" min="0" max="1" step="0.01" value="0" />
+    <div class="row wrap">
+      <button class="btn small" id="rp-restart">⏮</button>
+      <button class="btn small accent" id="rp-play">⏸</button>
+      <button class="btn small" id="rp-speed">×1</button>
+      <span class="rp-time" id="rp-time"></span>
+      <button class="btn small" id="rp-cam">🎥</button>
+      <button class="btn small" id="rp-photo">📷 Фото</button>
+      <button class="btn small" id="rp-exit">✕ Выход</button>
+    </div>
+  </div>
+
+  <!-- ===== Фоторежим ===== -->
+  <div id="photo-bar" class="photo-bar hidden">
+    <div class="row wrap">
+      <button class="btn big accent" id="ph-shot">📸 Снимок</button>
+      <button class="btn small" id="ph-mode">🔄 Облёт машины</button>
+      <label class="ph-opt">Угол обзора <input type="range" id="ph-fov" min="15" max="100" step="1" value="50" /></label>
+      <label class="ph-opt">Наклон <input type="range" id="ph-roll" min="-30" max="30" step="1" value="0" /></label>
+      <label class="ph-opt">Фильтр <select id="ph-filter"></select></label>
+      <button class="btn small" id="ph-hide">🙈 Скрыть панель</button>
+      <button class="btn small" id="ph-exit">✕ Выход</button>
+    </div>
+    <div class="hud-small" id="ph-help"></div>
+  </div>
+  <button id="ph-show" class="ph-show hidden" title="Показать панель">📷</button>
+  <div id="ph-flash" class="ph-flash"></div>
 
   <!-- ===== Сенсорное управление ===== -->
   <div id="touch" class="hidden">
@@ -301,6 +336,7 @@
     <h2>Пауза</h2>
     <button class="btn big" id="btn-resume">Продолжить</button>
     <button class="btn" id="btn-restart">Заново</button>
+    <button class="btn" id="btn-photo">📷 Фоторежим</button>
     <button class="btn" id="btn-tomenu">В главное меню</button>
   </div>
 
@@ -310,6 +346,7 @@
     <div class="over-record" id="over-record">🏆 НОВЫЙ РЕКОРД!</div>
     <div id="over-stats"></div>
     <div id="online-results" class="results hidden"></div>
+    <div class="row wrap center"><button class="btn" id="btn-replay">🎬 Повтор заезда</button><button class="btn" id="btn-over-photo">📷 Фото</button></div>
     <button class="btn big accent" id="btn-again">Ещё раз</button>
     <button class="btn" id="btn-over-menu">В меню</button>
   </div>
@@ -317,6 +354,6 @@
   <div id="countdown"></div>
   <div id="fps" class="hidden"></div>
 
-  <script src="dist/game.js?v=1791381123839"></script>
+  <script src="dist/game.js?v=1791381699539"></script>
 </body>
 </html>
