@@ -16,6 +16,8 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { clamp, lerp, fmtTime } from './utils.js';
 import { net, DEFAULT_SERVER } from './net.js';
+import * as PG from './progress.js';
+import { api, apiBase } from './api.js';
 
 // ======================= режимы =======================
 const MODES = [
@@ -25,7 +27,20 @@ const MODES = [
     bonus: (n) => Math.max(26, 42 - n * 1.5) },
   { id: 'free', name: 'Свободная езда', desc: 'Без таймера и давления. Катайся и тренируй дрифт.', timer: 0, rivals: 3,
     bonus: () => 0 },
+  { id: 'time', name: 'На время', desc: 'Один на трассе, без соперников: только ты и секундомер. Успей к следующему чекпоинту.', timer: 45, rivals: 0,
+    bonus: (n) => Math.max(20, 36 - n * 1.5) },
+  { id: 'elim', name: 'Выбывание', desc: '6 соперников. Каждые 30 секунд последний выбывает. Останься один на трассе!', timer: 0, rivals: 6, offline: true, place: true,
+    bonus: () => 0 },
+  { id: 'speed', name: 'Спидкамеры', desc: 'На каждом чекпоинте камера ловит скорость: чем быстрее пролетишь, тем больше очков.', timer: 50, rivals: 3,
+    bonus: (n) => Math.max(22, 38 - n * 2) },
+  { id: 'clean', name: 'Без ошибок', desc: 'Одно касание отбойника — и заезд окончен. Каждый чистый километр увеличивает множитель очков.', timer: 0, rivals: 0,
+    bonus: () => 0 },
+  { id: 'escape', name: 'Побег', desc: 'Сзади едет стена и всё время ускоряется. Догонит — конец. Как далеко уедешь?', timer: 0, rivals: 0,
+    bonus: () => 0 },
 ];
+MODES[0].place = true;
+const ELIM_INT = 30;   // с: интервал выбывания
+const isPlaceMode = (m) => !!m.place;
 // на картах-«Полигонах» трассы нет: свободная езда, очки за дрифт, без таймера и соперников
 const FIELD_MODE = { id: 'field', name: 'Полигон', desc: '', timer: 0, rivals: 0, bonus: () => 0 };
 const STEP = 1 / 240; // физика 240 шагов/с — плавно даже на мониторах 144–240 Гц
@@ -48,6 +63,16 @@ settings.easy = settings.handling === 'easy';
 const sel = Object.assign({ car: 0, colors: {}, mode: 0, map: 0, len: 10, fieldMode: 'obst' }, store.get('sel', {}));
 sel.mm = Object.assign({ mode: 'race', len: 10, size: 5, carRule: 'any' }, sel.mm || {}); // фильтры быстрого матча
 if (sel.car >= CARS.length) sel.car = 0;
+// прогресс: ездить можно только на купленных машинах (в гараже можно смотреть любые)
+const ownedIdx = () => CARS.findIndex((c) => c.id === 'kaze');
+if (!PG.owns(CARS[sel.car])) sel.car = Number.isInteger(sel.ownedCar) && CARS[sel.ownedCar] && PG.owns(CARS[sel.ownedCar]) ? sel.ownedCar : ownedIdx();
+sel.ownedCar = sel.car;
+// вернуть игрока на его машину, если в гараже он смотрел некупленную
+function ensureOwnedCar() {
+  if (PG.owns(CARS[sel.car])) { sel.ownedCar = sel.car; return; }
+  sel.car = PG.owns(CARS[sel.ownedCar] || CARS[0]) ? sel.ownedCar : ownedIdx(); saveSel();
+  if (W && state === 'menu') spawnPlayer(6, -2.8);
+}
 const LEN_MIN = 5, LEN_MAX = 50;
 let records = store.get('records', {});
 // рекорды по каждой машине: ключ «режим_карта[_км]|id машины». Старые общие рекорды переносим к их машине
@@ -113,7 +138,8 @@ function setupComposer() {
       composer.addPass(bloom);
       composer.addPass(new OutputPass());
     }
-    composer.setPixelRatio(renderer.getPixelRatio());
+    // постобработка в разрешении не выше 1x — свечение мягкое, а нагрузка на видеокарту в 2–4 раза меньше на Retina/4K
+    composer.setPixelRatio(Math.min(1, renderer.getPixelRatio()));
     composer.setSize(innerWidth, innerHeight);
     if (W) { bloom.strength = W.map.night ? 0.55 : 0.18; bloom.threshold = W.map.night ? 0.72 : 0.96; bloom.radius = 0.35; }
   } else if (composer) { composer.dispose(); composer = null; bloom = null; }
@@ -190,7 +216,8 @@ function buildWorld(mapIdx, seed, opts = {}) {
   const farPlane = new THREE.Mesh(new THREE.PlaneGeometry(5000, 5000), new THREE.MeshLambertMaterial({ color: map.ground.far }));
   farPlane.rotation.x = -Math.PI / 2; group.add(farPlane);
 
-  const smokeColor = map.smoke ?? { desert: 0xe6ddd0, snow: 0xffffff, city: 0xb8b8c8 }[map.id];
+  const tunedSmoke = PG.SMOKE_COLORS[PG.lookOf(CARS[sel.car]).smoke || 0];
+  const smokeColor = tunedSmoke ?? map.smoke ?? { desert: 0xe6ddd0, snow: 0xffffff, city: 0xb8b8c8 }[map.id];
   const smoke = new Smoke(group, smokeColor, settings.quality > 0 ? 90 : 50);
   const dust = new Smoke(group, map.dust ?? { desert: 0xcf9f6c, snow: 0xf4f8ff, city: 0x77777f }[map.id], 40);
   const skidCol = map.skid ?? (map.id === 'snow' ? 0x7d8898 : 0x0c0c0c);
@@ -202,12 +229,13 @@ function buildWorld(mapIdx, seed, opts = {}) {
   spawnPlayer(6, -2.8);
 }
 
-function carColor(spec) { return spec.colors[sel.colors[spec.id] ?? 0]; }
+function carColor(spec) { const p = PG.lookOf(spec).paint; return p || spec.colors[sel.colors[spec.id] ?? 0]; }
 
 function spawnPlayer(idx, lat) {
-  const spec = CARS[sel.car];
-  if (W.player) { W.group.remove(W.player.model.root); }
-  const model = buildCarModel(spec, carColor(spec), { night: W.map.night, outline: true });
+  const base = CARS[sel.car];
+  const spec = PG.tunedSpec(base); // техтюнинг меняет параметры физики
+  if (W.player) { W.group.remove(W.player.model.root); disposeModel(W.player.model); }
+  const model = buildCarModel(base, carColor(base), { night: W.map.night, outline: true, look: PG.lookOf(base) });
   model._tailBase = W.map.night ? 1.2 : 0.35;
     W.group.add(model.root);
   const veh = new Vehicle(spec);
@@ -222,6 +250,12 @@ function spawnPlayer(idx, lat) {
   }
   W.player = { veh, model };
   placePlayerModel(0);
+}
+
+// освобождаем геометрии старой модели (раньше при каждой смене машины в гараже копилась видеопамять)
+function disposeModel(model) {
+  if (!model) return;
+  model.root.traverse((o) => { if (o.isMesh && o.geometry && !o.userData.sharedGeo) o.geometry.dispose(); });
 }
 
 // Интерполяция между шагами физики: картинка плавная при любом FPS, без рывков «вперёд-назад»
@@ -283,7 +317,7 @@ function nameSprite(text) {
 function spawnRemoteCar(p) {
   if (p.model || !W) return;
   const spec = CARS[p.car] || CARS[0];
-  const model = buildCarModel(spec, spec.colors[p.color % spec.colors.length], { night: W.map.night, outline: true });
+  const model = buildCarModel(spec, (p.look && p.look.paint) || spec.colors[p.color % spec.colors.length], { night: W.map.night, outline: true, look: p.look || {} });
   model._tailBase = W.map.night ? 1.2 : 0.35;
   makeGhost(p, model);
   p.label = nameSprite(p.name);
@@ -416,12 +450,18 @@ function newGame(lenKm) {
     time: finite ? 0 : mode.timer, score: 0, dist: 0, startS: W.track.P(6).s, driftTotal: 0, overtakes: 0, cpCount: 0,
     nextCp: CP_FIRST_IDX, maxSpeed: 0, bestDrift: 0, hits: 0, cd: 3.6, cdShown: 4, started: false, over: false, braking: false,
     drift: { active: false, pts: 0, mult: 1, time: 0, idle: 0, angle: 0 }, driftShowT: 0, elapsed: 0, acc: 0,
+    // новые режимы
+    speedPts: 0, cams: 0, bestCam: 0,                // Спидкамеры
+    elimT: ELIM_INT, elimCount: 0, elimWin: false,   // Выбывание
+    crashed: false,                                  // Без ошибок
+    wallIdx: 6 - 45 / SP, wallV: 0,                  // Побег: стена стартует в 45 м позади
   };
 }
 
 const finishIdxFor = (lenKm) => (lenKm > 0 ? 6 + Math.round(lenKm * 1000 / SP) : Infinity);
 function startRace(opts = {}) {
   audio.init();
+  if (!opts.online) ensureOwnedCar();
   const lenKm = opts.len ?? (MAPS[sel.map].field ? 0 : sel.len);
   buildWorld(sel.map, opts.seed ?? ((Math.random() * 1e6) | 0), { finishIdx: finishIdxFor(lenKm), fieldMode: opts.fieldMode });
   newGame(lenKm);
@@ -461,7 +501,9 @@ function makeBackWall() {
 }
 function updateBackWall() {
   if (!W.backWall) return;
-  const p = W.track.sample(Math.max(W.track.base + 4, 3, G.maxIdx - BACK_WALL / SP));
+  let wi = G.maxIdx - BACK_WALL / SP;
+  if (G.mode.id === 'escape') wi = G.wallIdx; // Побег: стена — та, что догоняет
+  const p = W.track.sample(Math.max(W.track.base + 4, 3, wi));
   W.backWall.position.set(p.x, p.y + W.track.wall / 4, p.z);
   W.backWall.rotation.set(0, p.h, 0);
 }
@@ -483,6 +525,7 @@ function crashFx(impact) {
   return true;
 }
 function onHit(impact) {
+  if (G && G.mode.id === 'clean' && state === 'race' && impact > 2.5) G.crashed = true; // касание — конец заезда
   if (!crashFx(impact)) return;
   G.hits++;
   if (G.drift.active && G.drift.pts > 0 && impact > 3) {
@@ -668,13 +711,15 @@ function updateRace(dt) {
     // финиш соперника фиксируем по порядку
     if (G.finite && r.finOrder === undefined && r.fi >= G.finishIdx) r.finOrder = ++G.rivalFin;
     const isAhead = r.fi > veh.idx;
-    if (racing && r.ahead && !isAhead && G.mode.id === 'race') {
+    if (racing && r.ahead && !isAhead && isPlaceMode(G.mode)) {
       G.overtakes++; showMsg('ОБГОН!  +300', 1.2, '#7cff4f'); audio.score();
     }
     r.ahead = isAhead;
-    if (G.finite && veh.idx - r.fi > 170) {
+    if ((G.finite || G.mode.id === 'elim') && veh.idx - r.fi > 170) {
       // на трассе с финишем соперник, отставший больше чем на 340 м, сходит с дистанции (считается позади)
-      r.out = true; r.model.root.visible = false; continue;
+      r.out = true; r.model.root.visible = false;
+      if (G.mode.id === 'elim' && state === 'race') { G.elimCount++; showMsg(`ВЫБЫЛ: ${r.name}`, 1.4, '#ff9f1c'); }
+      continue;
     }
     if (veh.idx - r.fi > 170) {
       r.fi = veh.idx + 180 + Math.random() * 140;
@@ -715,7 +760,7 @@ function updateScoring(dt, veh) {
     if (d.idle > (veh.offroad ? 0.3 : 1.1)) {
       const pts = Math.floor(d.pts);
       if (pts > 30) {
-        G.driftTotal += pts; G.bestDrift = Math.max(G.bestDrift, pts);
+        G.driftTotal += pts; G.bestDrift = Math.max(G.bestDrift, pts); G.driftCount = (G.driftCount || 0) + 1;
         if (G.mode.id === 'drift' && !G.finite) G.time += Math.min(8, pts / 1200);
         const el = $('drift-pts'); el.textContent = '+' + pts; el.className = 'drift-pts banked';
         $('drift-info').textContent = pts > 5000 ? 'ЛЕГЕНДАРНЫЙ ДРИФТ!' : pts > 2000 ? 'ОТЛИЧНЫЙ ДРИФТ!' : 'ДРИФТ ЗАСЧИТАН';
@@ -741,29 +786,58 @@ function updateScoring(dt, veh) {
   if (veh.idx >= G.nextCp && veh.idx < G.finishIdx - 100) {
     G.cpCount++;
     G.nextCp += CP_EVERY;
+    let cam = '';
+    if (G.mode.id === 'speed') {
+      // спидкамера: очки за скорость, выше 200 км/ч — x1.5
+      const pts = Math.round(kmh * 10 * (kmh > 200 ? 1.5 : 1));
+      G.speedPts += pts; G.cams++; G.bestCam = Math.max(G.bestCam, kmh);
+      cam = `📸 ${speedStr(kmh)}  +${pts}  ·  `;
+    }
     if (G.mode.timer && !G.finite) {
       const bonus = Math.round(G.mode.bonus(G.cpCount - 1));
       G.time += bonus;
-      showMsg(`ЧЕКПОИНТ  +${bonus} с`, 1.8, '#ffcc00');
-    } else showMsg(`ЧЕКПОИНТ ${G.cpCount}`, 1.5, '#ffcc00');
+      showMsg(`${cam}ЧЕКПОИНТ  +${bonus} с`, 1.8, '#ffcc00');
+    } else showMsg(`${cam}ЧЕКПОИНТ ${G.cpCount}`, 1.5, '#ffcc00');
     audio.checkpoint();
   }
 
+  // --- Без ошибок: касание отбойника ---
+  if (G.crashed) { showMsg('КАСАНИЕ! ЗАЕЗД ОКОНЧЕН', 2.2, '#ff6b6b'); finishRace(false); return; }
+  // --- Побег: стена позади всё время ускоряется ---
+  if (G.mode.id === 'escape') {
+    G.wallV = Math.min(95, 16 + G.elapsed * 0.42);           // м/с: от ~58 км/ч до ~340 км/ч
+    G.wallIdx = Math.max(G.wallIdx + G.wallV * dt / SP, veh.idx - 400 / SP); // далеко не отстаёт
+    if (G.wallIdx >= veh.idx - 2.2 / SP) { showMsg('СТЕНА ДОГНАЛА!', 2.2, '#ff6b6b'); finishRace(false); return; }
+  }
+  // --- Выбывание: каждые ELIM_INT секунд последний выбывает ---
+  if (G.mode.id === 'elim') {
+    G.elimT -= dt;
+    const alive = W.rivals.filter((r) => !r.out);
+    if (!alive.length) { G.elimWin = true; G.place = 1; finishRace(true); return; }
+    if (G.elimT <= 0) {
+      G.elimT = ELIM_INT;
+      let worst = alive[0];
+      for (const r of alive) if (r.fi < worst.fi) worst = r;
+      if (veh.idx < worst.fi) { G.place = alive.length + 1; G.elimOut = true; showMsg('ТЫ ВЫБЫЛ!', 2.4, '#ff6b6b'); finishRace(false); return; }
+      worst.out = true; worst.model.root.visible = false; G.elimCount++;
+      showMsg(`ВЫБЫЛ: ${worst.name}`, 1.6, '#ff9f1c'); audio.score();
+      if (alive.length === 1) { G.elimWin = true; G.place = 1; finishRace(true); return; }
+    }
+  }
+
   // --- счёт и время ---
-  if (G.mode.id === 'race') G.score = Math.floor(G.dist) + G.overtakes * 300 + Math.floor(G.driftTotal / 4);
-  else if (G.mode.id === 'drift' || G.mode.id === 'field') G.score = G.driftTotal;
-  else G.score = Math.floor(G.dist);
+  G.score = calcScore();
   if (G.mode.timer && !G.finite) {
     G.time -= dt;
     if (G.time <= 0) { G.time = 0; finishRace(); }
   }
   // место в гонке (против ботов или онлайн)
-  if (G.mode.id === 'race' && W.rivals.length) G.place = 1 + W.rivals.filter((r) => !r.out && (r.finOrder !== undefined || r.fi > veh.idx)).length;
+  if (isPlaceMode(G.mode) && W.rivals.length) G.place = 1 + W.rivals.filter((r) => !r.out && (r.finOrder !== undefined || r.fi > veh.idx)).length;
   if (G.mode.id === 'race' && G.online) {
     let ahead = 0;
     for (const p of net.players.values()) {
       if (!net.racers.includes(p.id)) continue;
-      // для места берём самое свежее полученное положение, а не сглаженное (оно отстаёт на ~70 мс)
+      // для места берём самое свежее полученное положение, а не сглаженное (оно отстаёт на ~50 мс)
       const last = p.buf && p.buf.length ? p.buf[p.buf.length - 1].idx : (p.vis ? p.vis.idx : 0);
       if ((p.fin && p.fin.finished) || (!p.fin && last > veh.idx)) ahead++;
     }
@@ -771,17 +845,29 @@ function updateScoring(dt, veh) {
   }
 }
 
+function calcScore() {
+  const id = G.mode.id, d = Math.floor(G.dist);
+  if (id === 'race') return d + G.overtakes * 300 + Math.floor(G.driftTotal / 4);
+  if (id === 'drift' || id === 'field') return G.driftTotal;
+  if (id === 'time') return d + Math.floor(G.driftTotal / 8);
+  if (id === 'speed') return G.speedPts + Math.floor(d / 2);
+  if (id === 'clean') return Math.floor((d + G.driftTotal / 4) * (1 + Math.floor(G.dist / 1000) * 0.1)); // +10% за каждый чистый км
+  if (id === 'escape') return d + Math.floor(G.driftTotal / 10);
+  if (id === 'elim') return d + G.overtakes * 300 + G.elimCount * 1000 + (G.elimWin ? 5000 : 0);
+  return d;
+}
+
 // ключ рекорда: режим + карта (+ длина трассы, если она задана)
 const recKey = (modeId, mapId, lenKm) => `${modeId}_${mapId}${lenKm ? '_' + lenKm : ''}`;
 // на трассе с финишем в Гонке и Свободной езде рекорд — лучшее время, в Дрифте — очки
 const onlinePlace = (t) => 1 + net.results.filter((r) => r.finished && r.id !== net.id && r.time < t).length;
-const byTime = (modeId, lenKm) => lenKm > 0 && modeId !== 'drift';
+const byTime = (modeId, lenKm) => lenKm > 0 && ['race', 'free', 'time', 'clean'].includes(modeId);
 function finishRace(finished = false) {
   if (state === 'over') return;
   if (G.drift.active && G.drift.pts > 30) { G.driftTotal += Math.floor(G.drift.pts); G.bestDrift = Math.max(G.bestDrift, Math.floor(G.drift.pts)); }
-  if (G.mode.id === 'drift' || G.mode.id === 'field') G.score = G.driftTotal;
+  G.score = calcScore();
   G.finished = finished;
-  if (finished && G.mode.id === 'race' && W.rivals.length) G.place = 1 + W.rivals.filter((r) => !r.out && r.finOrder !== undefined).length;
+  if (finished && G.mode.id === 'race' && W.rivals.length && !G.elimWin) G.place = 1 + W.rivals.filter((r) => !r.out && r.finOrder !== undefined).length;
   // онлайн: место по точному времени финиша, а не по тому, чьё сообщение раньше дошло до сервера
   if (finished && G.mode.id === 'race' && G.online) G.place = onlinePlace(G.elapsed);
   // Дрифт на трассе с финишем: итог = очки дрифта + бонус за время (быстрее 60 км/ч в среднем) + онлайн бонус за место на финише
@@ -806,6 +892,15 @@ function finishRace(finished = false) {
   if (isRec || isCarRec) store.set('records', records);
   let title = G.mode.timer && !G.finite ? 'Время вышло!' : 'Заезд окончен';
   if (finished) title = G.place ? `ФИНИШ! ${G.place} место` : 'ФИНИШ!';
+  if (G.elimWin) title = 'ПОБЕДА! Ты остался один';
+  else if (G.elimOut) title = `Выбыл · ${G.place} место`;
+  if (G.crashed) title = 'Касание — заезд окончен';
+  if (G.mode.id === 'escape' && !finished) title = 'Стена догнала!';
+  // награда: монеты и опыт (онлайн — x1.5), статистика профиля, достижения
+  // онлайн-победы засчитывает сервер (сообщение rating), здесь — только заезды против ботов
+  const win = !G.online && !!(G.elimWin || (finished && isPlaceMode(G.mode) && G.place === 1 && W.rivals.length));
+  const rw = PG.finishRaceProgress(G, { isRecord: (isRec || isCarRec) && (G.dist >= 1000 || finished), carId: CARS[sel.car].id, mapId: W.map.id, win });
+  G.reward = rw;
   $('over-title').textContent = title;
   $('over-record').classList.toggle('show', isRec);
   const rows = [];
@@ -816,7 +911,18 @@ function finishRace(finished = false) {
     ['Все очки дрифта', G.driftTotal.toLocaleString('ru-RU')], ['Чекпоинты', G.cpCount]);
   if (G.mode.id === 'race' && !G.online) rows.push(['Обгоны', G.overtakes]);
   if (G.mode.id === 'drift' && G.finite) { rows.push(['Бонус за время', '+' + G.timeBonus.toLocaleString('ru-RU')]); if (G.online) rows.push(['Бонус за место на финише', G.finPlace ? `${G.finPlace}-й · +${G.placeBonus.toLocaleString('ru-RU')}` : '—']); }
+  if (G.mode.id === 'speed') rows.push(['Спидкамеры', `${G.cams} · лучшая ${speedStr(G.bestCam)} · ${G.speedPts.toLocaleString('ru-RU')} очк.`]);
+  if (G.mode.id === 'elim') rows.push(['Выбыло соперников', G.elimCount]);
+  if (G.mode.id === 'escape') rows.push(['Скорость стены', speedStr(G.wallV * 3.6)]);
   rows.push(['Удары', G.hits]);
+  const fmtN = (n) => n.toLocaleString('ru-RU');
+  rows.push(['Награда', `<span class="rw">+${fmtN(rw.coins)} 💰 · +${fmtN(rw.xp)} XP</span>`]);
+  for (const [n, c, x] of rw.lines) rows.push([`<small>${n}</small>`, `<small>+${fmtN(c)} 💰 · +${fmtN(x)} XP</small>`]);
+  if (rw.levelUp) rows.push(['🎉 Новый уровень', `${rw.level}! +${fmtN(rw.lvBonus)} 💰`]);
+  if (rw.newCars.length) rows.push(['🔓 Открыты машины', rw.newCars.map((c) => c.name).join(', ')]);
+  for (const a of rw.ach) rows.push([`🏅 ${a.name}`, `+${fmtN(a.coins)} 💰 · +${fmtN(a.xp)} XP`]);
+  if (rw.ach.length) setTimeout(() => showMsg(`🏅 ДОСТИЖЕНИЕ: ${rw.ach[0].name}`, 2.5, '#ffcc00'), 400);
+  cloudSync();
   if (!finished) rows.push(['Время в заезде', fmtTime(G.elapsed)]);
   if (old && !isRec) rows.push(['Рекорд', timeRec ? (old.time ? fmtTime(old.time) : '—') : old.score.toLocaleString('ru-RU')]);
   $('over-stats').innerHTML = rows.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join('');
@@ -970,11 +1076,14 @@ function updateHUD(dt) {
   const toFin = Math.max(0, (G.finishIdx - veh.idx) * SP);
   let next = W.track.isField ? 'свободная езда · дрифт' : `до чекпоинта ${Math.round(toCp)} м`;
   if (G.finite) next = `до финиша ${toFin >= 1000 ? (toFin / 1000).toFixed(2) + ' км' : Math.round(toFin) + ' м'}`;
+  if (G.mode.id === 'elim') next = `выбывание через ${Math.max(0, Math.ceil(G.elimT))} с · осталось ${W.rivals.filter((r) => !r.out).length + 1}`;
+  if (G.mode.id === 'escape') next = `стена в ${Math.max(0, Math.round((veh.idx - G.wallIdx) * SP))} м · ${speedStr(G.wallV * 3.6)}`;
+  if (G.mode.id === 'clean') next += ` · множитель x${(1 + Math.floor(G.dist / 1000) * 0.1).toFixed(1)}`;
   setText('hud-next', next);
   setText('hud-score', G.score.toLocaleString('ru-RU'));
   const total = (G.online ? net.players.size : W.rivals.length) + 1;
-  const placeStr = G.place && G.mode.id === 'race' ? ` · место ${G.place}/${total}` : '';
-  setText('hud-dist', `${(G.dist / 1000).toFixed(2)} км${G.finite ? ` из ${G.lenKm}` : ''}${G.mode.id === 'race' && !G.online ? ` · обгонов: ${G.overtakes}` : ''}${placeStr}`);
+  const placeStr = G.place && isPlaceMode(G.mode) ? ` · место ${G.place}/${total}` : '';
+  setText('hud-dist', `${(G.dist / 1000).toFixed(2)} км${G.finite ? ` из ${G.lenKm}` : ''}${isPlaceMode(G.mode) && !G.online ? ` · обгонов: ${G.overtakes}` : ''}${placeStr}`);
   const rec = records[recKey(G.mode.id, W.map.id, G.lenKm)];
   const timeRec = byTime(G.mode.id, G.lenKm);
   setText('hud-sub', rec ? (timeRec ? `рекорд: ${rec.time ? fmtTime(rec.time) : '—'}` : `рекорд: ${rec.score.toLocaleString('ru-RU')}`) : 'рекорда пока нет');
@@ -990,9 +1099,12 @@ function updateHUD(dt) {
 }
 
 // ======================= меню =======================
-const SCREENS = ['main', 'setup', 'garage', 'records', 'settings', 'controls', 'pause', 'over', 'online', 'lobby'];
-const MENU_SCREENS = ['main', 'setup', 'garage', 'records', 'settings', 'controls', 'online', 'lobby'];
+const SCREENS = ['main', 'setup', 'garage', 'tune', 'profile', 'ach', 'leader', 'records', 'settings', 'controls', 'pause', 'over', 'online', 'lobby'];
+const MENU_SCREENS = ['main', 'setup', 'garage', 'tune', 'profile', 'ach', 'leader', 'records', 'settings', 'controls', 'online', 'lobby'];
 function showScreen(name) {
+  // из гаража уходим только на своей машине (в лобби — можно на «прокатной», если её требует хост)
+  if (['main', 'setup', 'online', 'records', 'settings', 'controls', 'profile', 'ach', 'leader'].includes(name)) ensureOwnedCar();
+  renderWallet();
   for (const s of SCREENS) $('menu-' + s).classList.toggle('show', s === name);
   $('loading').classList.remove('show');
   if (MENU_SCREENS.includes(name)) {
@@ -1003,8 +1115,13 @@ function showScreen(name) {
     updateViewOffset(); camera.updateProjectionMatrix();
   }
   if (name === 'setup') renderSetup();
-  $('garage-info').classList.toggle('hidden', name !== 'garage');
+  $('garage-info').classList.toggle('hidden', name !== 'garage' && name !== 'tune');
   if (name === 'garage') { renderGarageGrid(); renderGarage(); }
+  if (name === 'tune') { renderTune(); renderGarage(); }
+  if (name === 'profile') { renderProfile(); loadRemoteProfile(); }
+  if (name === 'ach') renderAch();
+  if (name === 'leader') renderLeader();
+  if (name === 'main') setTimeout(showDaily, 300);
   if (name === 'records') renderRecords();
   if (name === 'settings') renderSettings();
   if (name === 'online') renderOnline();
@@ -1027,6 +1144,7 @@ function enterMenuWorld() {
 document.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => { audio.init(); audio.click(); showScreen(b.dataset.go); }));
 
 function renderSetup() {
+  if (!PG.mapUnlocked(sel.map)) { sel.map = 0; saveSel(); buildWorld(sel.map, 7); }
   const fieldSel = !!MAPS[sel.map].field;
   $('mode-cards').innerHTML = (fieldSel ? `<div class="card sel"><b>Полигон</b><small>На полигоне нет трассы: свободная езда без таймера, очки за дрифт.</small></div>` : '') + MODES.map((m, i) => `<div class="card ${i === sel.mode && !fieldSel ? 'sel' : ''}" ${fieldSel ? 'style="opacity:.4"' : ''} data-mode="${i}"><b>${m.name}</b><small>${m.desc}</small></div>`).join('');
   $('map-cards').innerHTML = MAPS.map((m, i) => {
@@ -1034,6 +1152,7 @@ function renderSetup() {
     const mid = m.field ? 'field' : MODES[sel.mode].id;
     const rec = records[recKey(mid, m.id, len)];
     const recTxt = rec ? (byTime(mid, len) ? (rec.time ? fmtTime(rec.time) : '') : rec.score.toLocaleString('ru-RU')) : '';
+    if (!PG.mapUnlocked(i)) return `<div class="card locked"><span class="tag">${m.tag}</span><b>🔒 ${m.name}</b><small>Откроется на ${PG.mapUnlockLevel(i)} уровне</small></div>`;
     return `<div class="card ${i === sel.map ? 'sel' : ''}" data-map="${i}"><span class="tag">${m.tag}</span><b>${m.name}</b><small>${m.desc}</small>${recTxt ? `<span class="rec">рекорд: ${recTxt}</span>` : ''}</div>`;
   }).join('');
   renderSetupOpts(fieldSel);
@@ -1079,7 +1198,7 @@ $('btn-start').addEventListener('click', () => { audio.click(); startRace(); });
 // ---------- гараж: сетка машин с картинками (модели рендерятся в маленькие превью один раз) ----------
 const thumbs = {}; // `${id}:${color}` -> dataURL
 let thumbR = null, thumbScene = null, thumbCam = null, thumbQueue = [], thumbBusy = false, thumbIdle = 0;
-function thumbKey(spec) { return `${spec.id}:${sel.colors[spec.id] ?? 0}`; }
+function thumbKey(spec) { return `${spec.id}:${sel.colors[spec.id] ?? 0}:${JSON.stringify(PG.lookOf(spec))}`; }
 function renderThumb(spec) {
   if (!thumbR) {
     const cv = document.createElement('canvas'); cv.width = 320; cv.height = 180;
@@ -1093,7 +1212,7 @@ function renderThumb(spec) {
     const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(-4, 8, 6); thumbScene.add(sun);
     thumbCam = new THREE.PerspectiveCamera(26, 16 / 9, 0.1, 100);
   }
-  const model = buildCarModel(spec, carColor(spec), { outline: true });
+  const model = buildCarModel(spec, carColor(spec), { outline: true, look: PG.lookOf(spec) });
   thumbScene.add(model.root);
   const box = new THREE.Box3().setFromObject(model.root);
   const size = box.getSize(new THREE.Vector3()), ctr = box.getCenter(new THREE.Vector3());
@@ -1131,12 +1250,18 @@ function pumpThumbs() {
   step();
 }
 function renderGarageGrid() {
-  $('garage-count').textContent = `${CARS.length} машин`;
-  // в сетке машины идут от самой медленной к самой быстрой
+  $('garage-count').textContent = `${PG.profile.owned.length} / ${CARS.length} машин`;
+  // машины сгруппированы по классам D → S, внутри класса — от медленной к быстрой
   const order = CARS.map((c, i) => i).sort((a, b) => (CARS[a].vmax || 0) - (CARS[b].vmax || 0));
-  $('car-grid').innerHTML = order.map((i) => {
-    const c = CARS[i], t = thumbs[thumbKey(c)];
-    return `<div class="car-card ${i === sel.car ? 'sel' : ''}" data-car="${i}"><img class="thumb" alt="" ${t ? `src="${t}"` : ''}/><b>${c.name}</b></div>`;
+  const CLS_NAME = { D: 'городские и приколы', C: 'стритовые', B: 'спорткары', A: 'суперкупе', S: 'гиперкары' };
+  $('car-grid').innerHTML = CLASSES.map((cl) => {
+    const list = order.filter((i) => carClass(CARS[i]) === cl);
+    const own = list.filter((i) => PG.owns(CARS[i])).length;
+    return `<div class="cls-head"><span class="cls cls-${cl}">${cl}</span> Класс ${cl} · ${CLS_NAME[cl]}<small>${own}/${list.length}</small></div>` + list.map((i) => {
+      const c = CARS[i], t = thumbs[thumbKey(c)], owned = PG.owns(c);
+      const tl = owned ? PG.tuneLevel(c) : 0;
+      return `<div class="car-card ${i === sel.car ? 'sel' : ''} ${owned ? '' : 'locked'}" data-car="${i}"><img class="thumb" alt="" ${t ? `src="${t}"` : ''}/><b>${c.name}</b>${owned ? (tl ? `<i class="tl">⚙${tl}</i>` : '') : PG.carUnlocked(c) ? `<i class="price">🔒 ${PG.carPrice(c).toLocaleString('ru-RU')}</i>` : `<i class="price lv">ур. ${PG.carUnlockLevel(c)}</i>`}</div>`;
+    }).join('');
   }).join('');
   document.querySelectorAll('.car-card').forEach((el) => el.addEventListener('click', () => selectCar(+el.dataset.car)));
   const missing = CARS.filter((c) => !thumbs[thumbKey(c)]);
@@ -1146,25 +1271,39 @@ function renderGarageGrid() {
   const cur = document.querySelector('.car-card.sel'); if (cur) cur.scrollIntoView({ block: 'nearest' });
 }
 function renderGarage() {
-  const c = CARS[sel.car];
+  const base = CARS[sel.car], owned = PG.owns(base);
+  const c = owned ? PG.tunedSpec(base) : base;
   $('car-name').textContent = c.name;
-  $('car-tag').innerHTML = `${escapeHtml(c.tag)}<span class="cls cls-${carClass(c)}">${carClass(c)}</span>`;
+  const tc = owned ? PG.tunedClass(base) : carClass(base);
+  $('car-tag').innerHTML = `${escapeHtml(c.tag)}<span class="cls cls-${tc}">${tc}</span>${tc !== carClass(base) ? `<small class="clsup">было ${carClass(base)} · PI ${Math.round(PG.perfIndex(base))}</small>` : ''}`;
   $('car-desc').textContent = c.desc;
-  const st = carStats(c);
-  $('car-stats').innerHTML = [['Скорость', st.top], ['Разгон', st.accel], ['Управляемость', st.handling], ['Дрифт', st.drift]]
-    .map(([n, v]) => `<div class="stat"><span>${n}</span><div class="bar"><i style="width:${Math.round(v * 100)}%"></i></div></div>`).join('');
-  $('car-spec').textContent = `${c.hp} л.с. · ${c.torque} Н·м · ${c.mass} кг · до ${speedStr(c.vmax || 250)} · привод ${c.drive === 'RWD' ? 'задний' : c.drive === 'AWD' ? 'полный' : 'передний'} · ${c.gears.length} ${c.gears.length < 5 ? 'передачи' : 'передач'}`;
+  const st = carStats(c), st0 = carStats(base);
+  // серая часть полоски — заводское значение, жёлтая прибавка — тюнинг
+  $('car-stats').innerHTML = [['Скорость', 'top'], ['Разгон', 'accel'], ['Управляемость', 'handling'], ['Дрифт', 'drift']]
+    .map(([n, k]) => `<div class="stat"><span>${n}</span><div class="bar"><i style="width:${Math.round(Math.min(st[k], st0[k]) * 100)}%"></i>${st[k] > st0[k] + 0.005 ? `<em style="left:${Math.round(st0[k] * 100)}%;width:${Math.round((Math.min(1, st[k]) - st0[k]) * 100)}%"></em>` : ''}</div></div>`).join('');
+  const price = PG.carPrice(base), money = PG.profile.money;
+  $('car-buy').innerHTML = owned
+    ? `<span class="own">✓ В гараже${PG.tuneLevel(base) ? ` · тюнинг ${PG.tuneLevel(base)}/${PG.PERF_PARTS.length * 3}` : ''}</span>${menuScreen === 'tune' ? '' : '<button class="btn small accent" id="btn-tune">🔧 Тюнинг</button>'}`
+    : !PG.carUnlocked(base) ? `<span class="price">🔒 откроется на ${PG.carUnlockLevel(base)} уровне · ${price.toLocaleString('ru-RU')} 💰</span>`
+    : `<span class="price">🔒 ${price.toLocaleString('ru-RU')} 💰</span><button class="btn small accent" id="btn-buy" ${money < price ? 'disabled' : ''}>${money < price ? `не хватает ${(price - money).toLocaleString('ru-RU')}` : 'Купить'}</button>`;
+  const bb = $('btn-buy'); if (bb) bb.addEventListener('click', () => {
+    if (!confirm(`Купить ${base.name} за ${price.toLocaleString('ru-RU')} 💰?`)) return;
+    if (PG.buyCar(base)) { audio.score(); sel.ownedCar = sel.car; saveSel(); renderWallet(); renderGarage(); renderGarageGrid(); }
+  });
+  const bt = $('btn-tune'); if (bt) bt.addEventListener('click', () => { audio.click(); showScreen('tune'); });
+  $('car-spec').textContent = `${c.hp} л.с. · ${Math.round(c.torque)} Н·м · ${c.mass} кг · до ${speedStr(c.vmax || 250)} · привод ${c.drive === 'RWD' ? 'задний' : c.drive === 'AWD' ? 'полный' : 'передний'} · ${c.gears.length} ${c.gears.length < 5 ? 'передачи' : 'передач'}`;
   const ci = sel.colors[c.id] ?? 0;
   $('car-colors').innerHTML = c.colors.map((col, i) => `<div class="swatch ${i === ci ? 'sel' : ''}" style="background:${col}" data-col="${i}"></div>`).join('');
   document.querySelectorAll('[data-col]').forEach((el) => el.addEventListener('click', () => {
     sel.colors[c.id] = +el.dataset.col; saveSel(); audio.click();
+    if (PG.lookOf(base).paint) PG.buyLook(base, 'paint', ''); // заводской цвет снимает покраску
     W.player.model.bodyMat.color.set(c.colors[+el.dataset.col]); renderGarage(); renderGarageGrid();
   }));
   document.querySelectorAll('.car-card').forEach((el) => el.classList.toggle('sel', +el.dataset.car === sel.car));
 }
 function selectCar(i) {
   if (i === sel.car) return;
-  sel.car = (i + CARS.length) % CARS.length; saveSel(); audio.click();
+  sel.car = (i + CARS.length) % CARS.length; if (PG.owns(CARS[sel.car])) sel.ownedCar = sel.car; saveSel(); audio.click();
   spawnPlayer(6, -2.8);
   renderGarage();
   const cur = document.querySelector('.car-card.sel'); if (cur) cur.scrollIntoView({ block: 'nearest' });
@@ -1172,6 +1311,69 @@ function selectCar(i) {
 function switchCar(d) { selectCar((sel.car + d + CARS.length) % CARS.length); }
 $('car-prev').addEventListener('click', () => switchCar(-1));
 $('car-next').addEventListener('click', () => switchCar(1));
+
+// ---------- кошелёк и уровень ----------
+function renderWallet() {
+  const lv = PG.level(), xp = PG.profile.xp, a = PG.xpForLevel(lv), b = PG.xpForLevel(lv + 1);
+  const html = `<b>💰 ${PG.profile.money.toLocaleString('ru-RU')}</b><span class="lv">Ур. ${lv}</span><span class="xpbar"><i style="width:${Math.round((xp - a) / (b - a) * 100)}%"></i></span>`;
+  document.querySelectorAll('.wallet').forEach((el) => { el.innerHTML = html; });
+}
+
+// ---------- тюнинг ----------
+let tuneTab = 'perf';
+function renderTune() {
+  const base = CARS[sel.car];
+  if (!PG.owns(base)) { showScreen('garage'); return; }
+  $('tune-car').textContent = base.name;
+  document.querySelectorAll('#tune-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tuneTab));
+  const t = PG.tuneOf(base), money = PG.profile.money;
+  const fmt = (n) => n.toLocaleString('ru-RU');
+  let html = '';
+  if (tuneTab === 'perf') {
+    html = PG.PERF_PARTS.map((part) => {
+      const cur = t.perf[part.id] || 0, got = (t.perfOwned || {})[part.id] || 0;
+      const btns = PG.STAGES.map((nm, k) => {
+        const have = k <= got, price = PG.perfPartPrice(base, part, k);
+        const lbl = k === 0 ? nm : have ? `${nm} ✓` : `${nm}<small>${fmt(price)}</small>`;
+        return `<button class="btn small ${cur === k ? 'on' : ''} ${!have && money < price ? 'poor' : ''}" data-perf="${part.id}" data-k="${k}">${lbl}</button>`;
+      }).join('');
+      return `<div class="tune-row"><div class="tn"><b>${part.name}</b><small>${part.desc}</small></div><div class="seg">${btns}</div></div>`;
+    }).join('');
+  } else {
+    const look = t.look;
+    html = PG.LOOK_PARTS.map((part) => {
+      const cur = look[part.id] ?? 0, price = PG.lookPartPrice(base, part);
+      let opts;
+      if (part.kind === 'paint') {
+        opts = `<div class="swatch ${!look.paint ? 'sel' : ''}" data-look="paint" data-v="" title="Заводской цвет" style="background:${base.colors[sel.colors[base.id] ?? 0]}">↺</div>` +
+          PG.PAINTS.map((col) => `<div class="swatch ${look.paint === col ? 'sel' : ''} ${PG.lookOwned(base, 'paint', col) ? '' : 'buy'}" data-look="paint" data-v="${col}" style="background:${col}"></div>`).join('');
+        return `<div class="tune-row"><div class="tn"><b>${part.name}</b><small>вариант — ${fmt(price)} 💰, купленный цвет переключается бесплатно</small></div><div class="swatches">${opts}</div></div>`;
+      }
+      opts = part.opts.map((nm, v) => {
+        const have = PG.lookOwned(base, part.id, v);
+        const dot = part.colors && part.colors[v] != null ? `<i class="dot" style="background:#${part.colors[v].toString(16).padStart(6, '0')}"></i>` : '';
+        return `<button class="btn small ${cur === v ? 'on' : ''} ${!have && money < price ? 'poor' : ''}" data-look="${part.id}" data-v="${v}">${dot}${nm}${have || v === 0 ? '' : `<small>${fmt(price)}</small>`}</button>`;
+      }).join('');
+      return `<div class="tune-row"><div class="tn"><b>${part.name}</b></div><div class="seg wrap">${opts}</div></div>`;
+    }).join('');
+  }
+  $('tune-list').innerHTML = html;
+  $('tune-list').querySelectorAll('[data-perf]').forEach((el) => el.addEventListener('click', () => {
+    if (!PG.buyPerf(base, el.dataset.perf, +el.dataset.k)) { showMsg('Не хватает денег', 1.2, '#ff6b6b'); audio.click(); return; }
+    audio.shift(); afterTune();
+  }));
+  $('tune-list').querySelectorAll('[data-look]').forEach((el) => el.addEventListener('click', () => {
+    const id = el.dataset.look, v = id === 'paint' ? el.dataset.v : +el.dataset.v;
+    if (!PG.buyLook(base, id, v)) { showMsg('Не хватает денег', 1.2, '#ff6b6b'); audio.click(); return; }
+    audio.click(); afterTune(true);
+  }));
+}
+function afterTune(look) {
+  if (look && W && state === 'menu') spawnPlayer(6, -2.8);
+  const k = thumbKey(CARS[sel.car]); delete thumbs[k];
+  renderWallet(); renderTune(); renderGarage();
+}
+document.querySelectorAll('#tune-tabs button').forEach((b) => b.addEventListener('click', () => { audio.click(); tuneTab = b.dataset.tab; renderTune(); }));
 
 // ---------- рекорды: фильтры по карте, режиму, машине и длине + группировка и сортировка ----------
 const recView = { map: 'all', mode: 'all', car: 'all', len: 'all', group: 'map', sort: 'best' };
@@ -1266,7 +1468,7 @@ const serverUrl = () => (settings.server || '').trim() || (/^(localhost|127\.)/.
 function setOnlineStatus(text, err) { const el = $('online-status'); el.textContent = text; el.classList.toggle('err', !!err); }
 const MM_LENS = [5, 10, 15, 20, 25, 30, 40, 50, 0];
 function renderOnline() {
-  const c = CARS[sel.car], cls = carClass(c);
+  const c = CARS[sel.car], cls = PG.owns(c) ? PG.tunedClass(c) : carClass(c);
   $('mm-car').innerHTML = `${c.name}<span class="cls cls-${cls}">${cls}</span>`;
   const seg = (id, items, key) => {
     $(id).innerHTML = items.map(([v, t]) => `<button class="btn small ${sel.mm[key] === v ? 'on' : ''}" data-v="${v}">${t}</button>`).join('');
@@ -1274,7 +1476,7 @@ function renderOnline() {
       audio.click(); const v = b.dataset.v; sel.mm[key] = /^\d+$/.test(v) ? +v : v; saveSel(); renderOnline();
     }));
   };
-  seg('mm-mode', [['race', 'Гонка'], ['drift', 'Дрифт']], 'mode');
+  seg('mm-mode', [['race', 'Гонка'], ['drift', 'Дрифт'], ['time', 'На время'], ['speed', 'Спидкамеры'], ['clean', 'Без ошибок'], ['escape', 'Побег']], 'mode');
   seg('mm-size', [[5, '5'], [10, '10']], 'size');
   seg('mm-car-rule', [['any', 'Любые'], ['class', `Класс ${cls}`], ['same', 'Та же машина']], 'carRule');
   if (!MM_LENS.includes(sel.mm.len)) sel.mm.len = 10;
@@ -1284,7 +1486,10 @@ function renderOnline() {
   $('on-server').placeholder = serverUrl();
   setOnlineStatus(net.connected ? 'Подключено' : '');
 }
-function myProfile() { const spec = CARS[sel.car]; return { name: settings.name || 'Игрок', car: sel.car, cls: carClass(spec), color: sel.colors[spec.id] ?? 0 }; }
+function myProfile() {
+  const spec = CARS[sel.car];
+  return { name: settings.name || 'Игрок', car: sel.car, cls: PG.owns(spec) ? PG.tunedClass(spec) : carClass(spec), color: sel.colors[spec.id] ?? 0, look: PG.lookOf(spec), level: PG.level(), token: PG.profile.cloud ? PG.profile.cloud.token : undefined };
+}
 async function goOnline(joinMsg) {
   audio.click();
   settings.name = $('on-name').value.trim().slice(0, 16); settings.server = $('on-server').value.trim(); saveSettings();
@@ -1296,10 +1501,12 @@ async function goOnline(joinMsg) {
   } catch (e) { setOnlineStatus(e.message, true); }
   document.querySelectorAll('#menu-online .btn').forEach((b) => (b.disabled = false));
 }
-const mmJoin = () => ({ mm: { ...sel.mm, maps: MAPS.map((m, i) => (m.field ? -1 : i)).filter((i) => i >= 0) } });
+const mmJoin = () => ({ mm: { ...sel.mm, maps: MAPS.map((m, i) => (m.field || !PG.mapUnlocked(i) ? -1 : i)).filter((i) => i >= 0) } });
 $('on-quick').addEventListener('click', () => goOnline(mmJoin()));
 $('mm-len').addEventListener('change', (e) => { sel.mm.len = +e.target.value; saveSel(); });
-function mmCar(d) { sel.car = (sel.car + d + CARS.length) % CARS.length; saveSel(); audio.click(); if (W && state === 'menu') spawnPlayer(6, -2.8); renderOnline(); }
+// следующая купленная машина в направлении d
+function nextOwned(from, d) { let i = from; for (let n = 0; n < CARS.length; n++) { i = (i + d + CARS.length) % CARS.length; if (PG.owns(CARS[i])) return i; } return from; }
+function mmCar(d) { sel.car = nextOwned(sel.car, d); sel.ownedCar = sel.car; saveSel(); audio.click(); if (W && state === 'menu') spawnPlayer(6, -2.8); renderOnline(); }
 $('mm-prev').addEventListener('click', () => mmCar(-1));
 $('mm-next').addEventListener('click', () => mmCar(1));
 $('mm-again').addEventListener('click', () => { showScreen('online'); goOnline(mmJoin()); });
@@ -1333,7 +1540,7 @@ function renderLobby() {
     const spec = CARS[p.car] || CARS[0];
     const col = spec.colors[p.color % spec.colors.length];
     const bad = !mm && net.config && net.config.car >= 0 && (p.me ? sel.car : p.car) !== net.config.car;
-    return `<div class="lp"><i style="background:${col}"></i><b>${p.id === net.host && !net.mm ? '👑 ' : ''}${escapeHtml(p.name)}${p.me ? ' (ты)' : ''}</b><span>${spec.name}${bad ? ' · ⚠ не та машина' : ''}${p.inRace ? ' · в заезде' : ''}</span></div>`;
+    return `<div class="lp"><i style="background:${col}"></i><b>${p.id === net.host && !net.mm ? '👑 ' : ''}${escapeHtml(p.name)}${p.me ? ' (ты)' : ''}</b><span>${p.me ? `ур. ${PG.level()}${PG.profile.rating != null ? ` · ★${PG.profile.rating}` : ''} · ` : p.level ? `ур. ${p.level}${p.rating != null ? ` · ★${p.rating}` : ''} · ` : ''}${spec.name}${bad ? ' · ⚠ не та машина' : ''}${p.inRace ? ' · в заезде' : ''}</span></div>`;
   }).join('');
   $('lobby-count').textContent = `Игроки: ${list.length} / ${mm ? mm.size : 10}`;
   $('lobby-car').textContent = CARS[sel.car].name;
@@ -1347,7 +1554,7 @@ function renderLobby() {
   // хост выбрал определённую машину: участник принимает (меняет машину) или выходит
   const needCar = lockCar && !host && sel.car !== c.car;
   $('lobby-carreq').classList.toggle('hidden', !needCar);
-  if (needCar) $('carreq-text').innerHTML = `Хост разрешил только машину <b>${CARS[c.car].name}</b>. Смени машину или выйди из комнаты — с другой машиной в заезд не пустит.`;
+  if (needCar) $('carreq-text').innerHTML = `Хост разрешил только машину <b>${CARS[c.car].name}</b>${PG.owns(CARS[c.car]) ? '' : ' (у тебя её нет — дадим на прокат на этот заезд)'}. Смени машину или выйди из комнаты — с другой машиной в заезд не пустит.`;
   const done = net.state === 'done';
   $('mm-again').classList.toggle('hidden', !(mm && done));
   $('lobby-leave').textContent = mm && !done ? '✕ Отмена' : '← Выйти';
@@ -1365,7 +1572,7 @@ function renderLobby() {
   if (host) {
     $('lc-map').innerHTML = MAPS.map((m, i) => `<option value="${i}" ${i === c.map ? 'selected' : ''}>${m.name}</option>`).join('');
     const field = !!(MAPS[c.map] || {}).field;
-    $('lc-mode').innerHTML = MODES.map((m) => `<option value="${m.id}" ${m.id === c.mode ? 'selected' : ''}>${m.name}</option>`).join('');
+    $('lc-mode').innerHTML = MODES.filter((m) => !m.offline).map((m) => `<option value="${m.id}" ${m.id === c.mode ? 'selected' : ''}>${m.name}</option>`).join('');
     $('lc-mode-row').classList.toggle('hidden', field);
     $('lc-len-row').classList.toggle('hidden', field);
     $('lc-fm-row').classList.toggle('hidden', !field);
@@ -1402,7 +1609,7 @@ $('lobby-start').addEventListener('click', () => {
 });
 $('lobby-leave').addEventListener('click', () => { audio.click(); net.disconnect(true); showScreen('online'); });
 function lobbyCar(d) {
-  sel.car = (sel.car + d + CARS.length) % CARS.length; saveSel(); audio.click();
+  sel.car = nextOwned(sel.car, d); sel.ownedCar = sel.car; saveSel(); audio.click();
   if (W && state === 'menu') spawnPlayer(6, -2.8);
   net.send({ t: 'profile', ...myProfile() });
   renderLobby();
@@ -1417,7 +1624,7 @@ function renderOnlineResults() {
   const c = net.config || {};
   // Дрифт и бесконечная трасса — по очкам; трасса с финишем — по времени (сошедшие внизу)
   const byScore = c.mode === 'drift' || !c.len || (MAPS[c.map] || {}).field;
-  const nm = (r) => `${escapeHtml(r.name)}${r.id === net.id ? ' (ты)' : ''}`;
+  const nm = (r) => `${escapeHtml(r.name)}${r.id === net.id ? ' (ты)' : ''}${r.flagged ? ' <span class="flag" title="Сервер не принял результат: подозрение на читы">⚠</span>' : ''}`;
   let rows;
   if (byScore) rows = res.sort((a, b) => b.score - a.score).map((r, i) => `<tr><td>${i + 1}</td><td>${nm(r)}</td><td>${r.score.toLocaleString('ru-RU')} очк.</td></tr>`);
   else {
@@ -1446,6 +1653,13 @@ setInterval(() => {
   const el = document.getElementById('mm-wait-t');
   if (el && net.mmSince) { const t = Math.floor((Date.now() - net.mmSince) / 1000); el.textContent = `ожидание ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; }
 }, 1000);
+net.on.rating = (m) => {
+  PG.profile.rating = m.rating;
+  PG.onlineResult(m.place, m.of, G ? G.mode.id : 'race', G ? CARS[sel.car].id : '');
+  showMsg(`РЕЙТИНГ ${m.rating}  (${m.delta >= 0 ? '+' : ''}${m.delta})`, 2.5, m.delta >= 0 ? '#7cff4f' : '#ff6b6b');
+  const el = $('over-stats'); if (el && state === 'over') el.insertAdjacentHTML('beforeend', `<span>Рейтинг</span><b>${m.rating} (${m.delta >= 0 ? '+' : ''}${m.delta}) · ${m.place}/${m.of}</b>`);
+  cloudSync();
+};
 net.on.mm = (m) => { if (m.state === 'countdown') audio.countdown(false); if (menuScreen === 'lobby') renderLobby(); };
 net.on.lobby = () => { renderOnlineResults(); if (menuScreen === 'lobby') renderLobby(); };
 net.on.error = (t) => { if (menuScreen === 'online') setOnlineStatus(t, true); else showMsg(t, 2.5, '#ff6b6b'); };
@@ -1463,6 +1677,188 @@ net.on.start = (m) => {
   for (const p of net.players.values()) { p.model = null; p.vis = null; p.buf = []; }
   startRace({ seed: m.seed, len: field ? 0 : c.len, fieldMode: c.fieldMode, online: true });
 };
+
+
+// ======================= профиль, достижения, лидерборд, облако =======================
+const fmtN = (n) => Math.round(n || 0).toLocaleString('ru-RU');
+const MODE_NAME = (id) => (id === 'field' ? 'Полигон' : (MODES.find((m) => m.id === id) || { name: id }).name);
+const MAP_NAME = (id) => (MAPS.find((m) => m.id === id) || { name: id }).name;
+
+// ---------- облачное сохранение (на онлайн-сервере) ----------
+api.setBase(apiBase(serverUrl()));
+let syncTimer = 0, syncBusy = false;
+function bestRecordsList() {
+  const best = new Map();
+  for (const e of allRecordEntries()) {
+    const k = `${e.mode.id}|${e.map.id}|${e.len}`, o = best.get(k);
+    const better = !o || (e.timeRec ? e.r.time && (!o.time || e.r.time < o.time) : e.r.score > o.score);
+    if (better) best.set(k, { mode: e.mode.id, map: e.map.id, len: e.len, score: e.r.score || 0, time: e.r.time || 0, car: e.car.id });
+  }
+  return [...best.values()].slice(0, 500);
+}
+async function cloudSyncNow() {
+  if (syncBusy) return; syncBusy = true;
+  try {
+    api.setBase(apiBase(serverUrl()));
+    const name = settings.name || 'Игрок';
+    if (!PG.profile.cloud) { const r = await api.register(name); PG.profile.cloud = { id: r.id, token: r.token }; PG.saveProfile(); }
+    const r = await api.sync({ token: PG.profile.cloud.token, name, save: { v: 2, profile: PG.profile, records, sel }, stats: PG.publicStats(), records: bestRecordsList() });
+    if (r && r.profile) { if (Number.isFinite(r.profile.rating)) PG.profile.rating = r.profile.rating; PG.profile.cloudAt = Date.now(); localStorage.setItem('ed_profile', JSON.stringify(PG.profile)); }
+    if (menuScreen === 'profile') renderProfile();
+  } catch (e) { /* сервер спит или недоступен — попробуем в следующий раз */ }
+  syncBusy = false;
+}
+function cloudSync() { clearTimeout(syncTimer); syncTimer = setTimeout(cloudSyncNow, 1500); }
+
+// ---------- ежедневная награда ----------
+function showDaily() {
+  if (!PG.dailyAvailable()) return;
+  const y = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+  const day = PG.profile.daily.last === y ? (PG.profile.daily.streak % 7) + 1 : 1;
+  $('daily-days').innerHTML = PG.DAILY.map(([c, x], i) => `<div class="dday ${i + 1 < day ? 'got' : i + 1 === day ? 'now' : ''}"><small>День ${i + 1}</small><b>${fmtN(c)} 💰</b><small>+${x} XP</small></div>`).join('');
+  $('daily').classList.remove('hidden');
+}
+$('daily-claim').addEventListener('click', () => {
+  const r = PG.claimDaily(); audio.init(); audio.score();
+  $('daily').classList.add('hidden');
+  if (r) showMsg(`+${fmtN(r.coins)} 💰  +${r.xp} XP  ·  день ${r.day}`, 2.2, '#ffcc00');
+  PG.checkAchievements(); renderWallet(); cloudSync();
+});
+
+// ---------- профиль ----------
+let remoteProfile = null;
+function statGrid(items) { return `<div class="pgrid">${items.map(([n, v]) => `<div><small>${n}</small><b>${v}</b></div>`).join('')}</div>`; }
+function renderProfile() {
+  const st = PG.profile.stats, lv = PG.level(), xp = PG.profile.xp, a = PG.xpForLevel(lv), b = PG.xpForLevel(lv + 1);
+  const winRate = st.wins + st.losses ? Math.round(st.wins / (st.wins + st.losses) * 100) + '%' : '—';
+  const rating = remoteProfile && Number.isFinite(remoteProfile.rating) ? remoteProfile.rating : PG.profile.rating;
+  const modes = Object.entries(st.modes).sort((x, y) => y[1].races - x[1].races);
+  const hist = (remoteProfile && remoteProfile.online && remoteProfile.online.history) || [];
+  $('profile-body').innerHTML = `
+    <label class="opt">Никнейм <input type="text" id="pf-name" maxlength="16" value="${escapeHtml(settings.name || '')}" placeholder="Игрок" /></label>
+    <div class="pf-level"><b>Уровень ${lv}</b>${lv < PG.MAX_LEVEL ? `<span>${fmtN(xp - a)} / ${fmtN(b - a)} XP</span>` : '<span>максимум!</span>'}<div class="xpbar big"><i style="width:${lv < PG.MAX_LEVEL ? Math.round((xp - a) / (b - a) * 100) : 100}%"></i></div></div>
+    ${statGrid([['Монеты', fmtN(PG.profile.money) + ' 💰'], ['Рейтинг', rating != null ? fmtN(rating) + (remoteProfile && remoteProfile.ratingRank ? ` · #${remoteProfile.ratingRank}` : '') : '—'], ['Победы', fmtN(st.wins)], ['Заезды', fmtN(st.races)],
+      ['Поражения', fmtN(st.losses)], ['Процент побед', winRate], ['Лучший результат', fmtN(st.bestScore)], ['Лучший дрифт', fmtN(st.bestDrift)],
+      ['Макс. скорость', speedStr(st.maxSpeed)], ['Дистанция', (st.distance / 1000).toFixed(1) + ' км'], ['Машины', `${PG.profile.owned.length} / ${CARS.length}`], ['Достижения', `${Object.keys(PG.profile.ach).length} / ${PG.ACHIEVEMENTS.length}`],
+      ['Онлайн-заезды', fmtN(remoteProfile ? remoteProfile.matches : st.online)], ['Онлайн-победы', fmtN(remoteProfile ? remoteProfile.wins : st.onlineWins)]])}
+    <h3>По режимам</h3>
+    ${modes.length ? `<table class="ptable"><tr><th>Режим</th><th>Заезды</th><th>Победы</th><th>Лучший</th><th>Км</th></tr>${modes.map(([id, m]) => `<tr><td>${MODE_NAME(id)}</td><td>${m.races}</td><td>${m.wins}</td><td>${fmtN(m.best)}</td><td>${((m.dist || 0) / 1000).toFixed(1)}</td></tr>`).join('')}</table>` : '<p class="hint">Пока нет заездов.</p>'}
+    ${hist.length ? `<h3>История онлайн-заездов</h3><table class="ptable"><tr><th>Режим</th><th>Карта</th><th>Место</th><th>Рейтинг</th></tr>${hist.slice(0, 15).map((h) => `<tr><td>${MODE_NAME(h.mode)}</td><td>${escapeHtml(MAPS[h.map] ? MAPS[h.map].name : String(h.map))}</td><td>${h.place}/${h.of}</td><td>${h.ratingDelta >= 0 ? '+' : ''}${h.ratingDelta} → ${h.rating}</td></tr>`).join('')}</table>` : ''}
+    <h3>Сохранение прогресса</h3>
+    <p class="hint">Прогресс хранится в браузере (с резервной копией) и в облаке на игровом сервере. ${PG.profile.cloudAt ? `Последнее облачное сохранение: ${new Date(PG.profile.cloudAt).toLocaleString('ru-RU')}.` : 'В облако ещё не сохранялось.'}</p>
+    <div class="row wrap">
+      <button class="btn small" id="pf-cloud">☁ Сохранить в облако</button>
+      <button class="btn small" id="pf-code">🔑 Код восстановления</button>
+      <button class="btn small" id="pf-restore">↺ Восстановить по коду</button>
+      <button class="btn small" id="pf-export">⇩ Экспорт</button>
+      <button class="btn small" id="pf-import">⇧ Импорт</button>
+    </div>
+    <div class="pf-out" id="pf-out"></div>`;
+  $('pf-name').addEventListener('change', (e) => { settings.name = e.target.value.trim().slice(0, 16); saveSettings(); cloudSync(); });
+  const out = (html) => { $('pf-out').innerHTML = html; };
+  $('pf-cloud').addEventListener('click', async () => { out('Сохраняем… (сервер может просыпаться до минуты)'); await cloudSyncNow(); out(PG.profile.cloudAt && Date.now() - PG.profile.cloudAt < 5000 ? '✓ Сохранено в облаке' : 'Сервер недоступен, попробуй позже'); });
+  $('pf-code').addEventListener('click', async () => {
+    if (!PG.profile.cloud) { out('Создаём облачный профиль…'); await cloudSyncNow(); }
+    out(PG.profile.cloud ? `Сохрани этот код — по нему прогресс восстанавливается на любом устройстве. Никому его не показывай:<textarea readonly>${PG.profile.cloud.token}</textarea>` : 'Сервер недоступен, попробуй позже');
+  });
+  $('pf-restore').addEventListener('click', async () => {
+    const code = (prompt('Вставь код восстановления') || '').replace(/[\s-]/g, '');
+    if (!code) return;
+    out('Загружаем…');
+    try {
+      const r = await api.restore(code);
+      if (!r.save || !r.save.profile) throw new Error('В облаке нет сохранения');
+      if (!confirm('Заменить текущий прогресс сохранением из облака?')) { out(''); return; }
+      const sv = r.save; sv.profile.cloud = { id: r.id, token: code };
+      localStorage.setItem('ed_profile', JSON.stringify(sv.profile)); localStorage.setItem('ed_profile_bak', JSON.stringify(sv.profile));
+      if (sv.records) store.set('records', sv.records);
+      if (sv.sel) store.set('sel', sv.sel);
+      if (r.name) { settings.name = r.name; saveSettings(); }
+      location.reload();
+    } catch (e) { out('⚠ ' + e.message); }
+  });
+  $('pf-export').addEventListener('click', () => {
+    const code = PG.exportSave({ records, sel });
+    out(`Код сохранения (скопируй и храни у себя):<textarea readonly>${code}</textarea>`);
+    try { navigator.clipboard.writeText(code); } catch { /* нет доступа к буферу */ }
+  });
+  $('pf-import').addEventListener('click', () => {
+    const code = prompt('Вставь код сохранения'); if (!code) return;
+    try {
+      if (!confirm('Заменить текущий прогресс?')) return;
+      const d = PG.importSave(code);
+      if (d.extra && d.extra.records) store.set('records', d.extra.records);
+      if (d.extra && d.extra.sel) store.set('sel', d.extra.sel);
+      location.reload();
+    } catch (e) { out('⚠ Неверный код сохранения'); }
+  });
+}
+async function loadRemoteProfile() {
+  if (!PG.profile.cloud) return;
+  try { remoteProfile = await api.profile(PG.profile.cloud.id); if (menuScreen === 'profile') renderProfile(); } catch { /* офлайн */ }
+}
+
+// ---------- достижения ----------
+function renderAch() {
+  const done = PG.ACHIEVEMENTS.filter((a) => PG.profile.ach[a.id]).length;
+  $('ach-count').textContent = `${done} / ${PG.ACHIEVEMENTS.length}`;
+  $('ach-list').innerHTML = PG.ACHIEVEMENTS.map((a) => {
+    const p = PG.achProgress(a);
+    return `<div class="ach ${p.done ? 'done' : ''}"><div><b>${p.done ? '🏅' : '🔒'} ${a.name}</b><small>${a.desc}</small>
+      ${p.done ? '' : `<div class="xpbar"><i style="width:${Math.round(p.cur / p.goal * 100)}%"></i></div><small>${fmtN(p.cur)} / ${fmtN(p.goal)}</small>`}</div>
+      <span class="ach-rw">+${fmtN(a.coins)} 💰${a.xp ? `<br/>+${fmtN(a.xp)} XP` : ''}</span></div>`;
+  }).join('');
+}
+
+// ---------- лидерборд и таблица игроков ----------
+const lbView = { board: 'rating', mode: 'drift', map: '', len: '', q: '' };
+const BOARDS = [['rating', 'Рейтинг'], ['wins', 'Победы'], ['level', 'Уровень'], ['drift', 'Дрифт'], ['speed', 'Скорость'], ['distance', 'Дистанция'], ['mode', 'По режимам и картам']];
+async function renderLeader() {
+  const opt = (v, t, cur) => `<option value="${v}" ${String(v) === String(cur) ? 'selected' : ''}>${t}</option>`;
+  $('lb-tabs').innerHTML = BOARDS.map(([id, n]) => `<button class="btn small ${lbView.board === id ? 'on' : ''}" data-lb="${id}">${n}</button>`).join('');
+  $('lb-filters').innerHTML = lbView.board === 'mode' ? `
+    <label>Режим<select data-lf="mode">${[...MODES, FIELD_MODE].map((m) => opt(m.id, m.name, lbView.mode)).join('')}</select></label>
+    <label>Карта<select data-lf="map">${opt('', 'Все карты', lbView.map)}${MAPS.map((m) => opt(m.id, m.name, lbView.map)).join('')}</select></label>
+    <label>Длина<select data-lf="len">${opt('', 'Любая', lbView.len)}${[0, 5, 10, 15, 20, 25, 30, 40, 50].map((l) => opt(l, l ? l + ' км' : '∞ / полигон', lbView.len)).join('')}</select></label>` : '';
+  $('lb-tabs').querySelectorAll('[data-lb]').forEach((b) => b.addEventListener('click', () => { audio.click(); lbView.board = b.dataset.lb; lbView.q = ''; $('lb-search').value = ''; renderLeader(); }));
+  $('lb-filters').querySelectorAll('[data-lf]').forEach((el) => el.addEventListener('change', () => { lbView[el.dataset.lf] = el.value; renderLeader(); }));
+  const box = $('lb-table');
+  box.innerHTML = '<p class="hint">Загрузка… (бесплатный сервер может просыпаться до минуты)</p>';
+  try {
+    api.setBase(apiBase(serverUrl()));
+    let rows, me = null;
+    if (lbView.q) rows = (await api.search(lbView.q)).rows || [];
+    else {
+      const params = { board: lbView.board, limit: 100 };
+      if (lbView.board === 'mode') { params.mode = lbView.mode; if (lbView.map) params.map = lbView.map; if (lbView.len !== '') params.len = lbView.len; }
+      if (PG.profile.cloud) params.token = PG.profile.cloud.token;
+      const r = await api.leaderboard(params); rows = r.rows || []; me = r.me;
+    }
+    if (!rows.length) { box.innerHTML = '<p class="hint">Пока пусто — сыграй и попади в таблицу первым!</p>'; return; }
+    const myId = PG.profile.cloud && PG.profile.cloud.id;
+    box.innerHTML = `<table class="ptable lb"><tr><th>#</th><th>Игрок</th><th>Ур.</th><th>Рейтинг</th><th>Победы</th><th>Лучшее</th></tr>${rows.map((r, i) => `<tr class="${String(r.id) === String(myId) ? 'me' : ''}" data-pid="${escapeHtml(r.id)}"><td>${r.rank ?? i + 1}</td><td>${escapeHtml(r.name)}</td><td>${r.level ?? '—'}</td><td>${r.rating != null ? fmtN(r.rating) : '—'}</td><td>${fmtN(r.wins)}</td><td>${escapeHtml(r.bestLabel ?? (r.best != null ? fmtN(r.best) : '—'))}</td></tr>`).join('')}</table>${me && me.rank ? `<p class="hint">Твоё место: ${me.rank}</p>` : ''}`;
+    box.querySelectorAll('[data-pid]').forEach((tr) => tr.addEventListener('click', () => openPlayer(tr.dataset.pid)));
+  } catch (e) { box.innerHTML = `<p class="hint">⚠ ${escapeHtml(e.message)}</p>`; }
+}
+$('lb-search').addEventListener('change', (e) => { lbView.q = e.target.value.trim(); renderLeader(); });
+async function openPlayer(id) {
+  const pv = $('player-view');
+  pv.classList.remove('hidden');
+  $('pv-body').innerHTML = '<p class="hint">Загрузка…</p>';
+  try {
+    const p = await api.profile(id), s = p.stats || {};
+    const hist = (p.online && p.online.history) || [];
+    const ms = Object.entries((p.online && p.online.modeStats) || {});
+    $('pv-body').innerHTML = `<h2>${escapeHtml(p.name)}</h2>
+      ${statGrid([['Уровень', p.level ?? s.level ?? '—'], ['Рейтинг', p.rating != null ? fmtN(p.rating) + (p.ratingRank ? ` · #${p.ratingRank}` : '') : '—'], ['Победы', fmtN(p.wins)], ['Матчи', fmtN(p.matches)],
+        ['Поражения', fmtN(p.losses)], ['Процент побед', p.winRate != null ? Math.round(p.winRate * (p.winRate <= 1 ? 100 : 1)) + '%' : '—'], ['Лучший дрифт', fmtN(s.bestDrift)], ['Макс. скорость', speedStr(s.maxSpeed || 0)],
+        ['Дистанция', ((s.distance || 0) / 1000).toFixed(1) + ' км'], ['Машины', `${s.carsOwned ?? '—'} / ${s.carsTotal ?? CARS.length}`], ['Достижения', `${s.achievements ?? '—'} / ${s.achievementsTotal ?? PG.ACHIEVEMENTS.length}`], ['Заезды (всего)', fmtN(s.races)]])}
+      ${ms.length ? `<h3>Онлайн по режимам</h3><table class="ptable"><tr><th>Режим</th><th>Матчи</th><th>Победы</th><th>Лучший</th></tr>${ms.map(([k, v]) => `<tr><td>${MODE_NAME(k)}</td><td>${v.matches ?? v.races ?? 0}</td><td>${v.wins ?? 0}</td><td>${fmtN(v.best)}</td></tr>`).join('')}</table>` : ''}
+      ${(p.records || []).length ? `<h3>Лучшие результаты</h3><table class="ptable"><tr><th>Режим</th><th>Карта</th><th>Длина</th><th>Результат</th></tr>${p.records.slice(0, 12).map((r) => `<tr><td>${MODE_NAME(r.mode)}</td><td>${escapeHtml(MAP_NAME(r.map))}</td><td>${r.len ? r.len + ' км' : '∞'}</td><td>${r.time && byTime(r.mode, r.len) ? fmtTime(r.time) : fmtN(r.score)}</td></tr>`).join('')}</table>` : ''}
+      ${hist.length ? `<h3>Последние онлайн-заезды</h3><table class="ptable"><tr><th>Режим</th><th>Место</th><th>Рейтинг</th></tr>${hist.slice(0, 10).map((h) => `<tr><td>${MODE_NAME(h.mode)}</td><td>${h.place}/${h.of}</td><td>${h.ratingDelta >= 0 ? '+' : ''}${h.ratingDelta} → ${h.rating}</td></tr>`).join('')}</table>` : ''}`;
+  } catch (e) { $('pv-body').innerHTML = `<p class="hint">⚠ ${escapeHtml(e.message)}</p>`; }
+}
+$('pv-close').addEventListener('click', () => { audio.click(); $('player-view').classList.add('hidden'); });
 
 // пауза / итоги
 function pause() { if (state !== 'race' && state !== 'countdown') return; G.prevState = state; state = 'paused'; showScreen('pause'); audio.update(W.player.veh, W.player.veh.spec, 0, 0, false, 0, false); }
@@ -1499,6 +1895,19 @@ function handleEvents(evs) {
   }
 }
 
+// Оптимизация: новые куски трассы неподвижны — один раз считаем их матрицы и больше не пересчитываем каждый кадр
+const frozen = new WeakSet();
+function freezeStatic() {
+  const root = W && W.track && W.track.root;
+  if (!root) return;
+  for (const ch of root.children) {
+    if (frozen.has(ch) || ch === W.track.sea || ch.userData.dynamic) continue; // море и анимированное двигаются
+    frozen.add(ch);
+    ch.updateMatrixWorld(true);
+    ch.traverse((o) => { o.matrixAutoUpdate = false; });
+  }
+}
+
 // ======================= главный цикл =======================
 let last = performance.now();
 const fpsMeter = { frames: 0, t: performance.now(), value: 0 };
@@ -1506,6 +1915,8 @@ function frame(now) {
   requestAnimationFrame(frame);
   // ограничение FPS (0 = без ограничений; выше частоты монитора браузер всё равно не рисует)
   if (settings.fps > 0 && now - last < 1000 / settings.fps - 0.7) return;
+  // в меню машина стоит — хватает 60 кадров/с (меньше греется телефон и ноутбук)
+  if (state === 'menu' && now - last < 1000 / 60 - 0.7) return;
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   fpsMeter.frames++;
@@ -1530,7 +1941,9 @@ function frame(now) {
     updateRace(dt);
   }
   updateDynRes(dt);
-  if (composer) composer.render(); else renderer.render(scene, camera);
+  freezeStatic();
+  // свечение (bloom) заметно только ночью: днём рисуем напрямую, без лишних проходов постобработки
+  if (composer && W.map.night) composer.render(); else renderer.render(scene, camera);
 }
 
 // старт
@@ -1541,5 +1954,5 @@ showScreen('main');
 requestAnimationFrame(frame);
 
 // для отладки/тестов
-window.__game = { renderer, get W() { return W; }, get G() { return G; }, get state() { return state; }, startRace, showScreen, sel, settings, cam, net, CARS, camera, scene,
+window.__game = { renderer, get W() { return W; }, get G() { return G; }, get state() { return state; }, startRace, showScreen, sel, settings, cam, net, CARS, camera, scene, PG, finishRace: (f) => finishRace(!!f), MODES,
   tick(dt, n = 1) { for (let i = 0; i < n; i++) { if (state === "countdown" || state === "race" || state === "over") { G._events = []; updateRace(dt); } } } };
