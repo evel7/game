@@ -1909,10 +1909,13 @@ function renderProfile() {
     <div class="hint" id="pf-sync">${syncInfoHtml()}</div>
     <div class="row wrap">
       <button class="btn small" id="pf-code">🔑 Код восстановления</button>
+      <button class="btn small" id="pf-restore-open">↺ Восстановить по коду</button>
       <button class="btn small" id="pf-save">☁ Сохранить сейчас</button>
     </div>
-    <label class="opt">Восстановить по коду <input type="text" id="pf-restore-code" placeholder="XXXX-XXXX-…" autocomplete="off" autocapitalize="characters" spellcheck="false" /></label>
-    <div class="row wrap"><button class="btn small" id="pf-restore">↺ Восстановить</button></div>
+    <div class="hidden" id="pf-restore-box">
+      <label class="opt">Код с другого устройства <input type="text" id="pf-restore-code" placeholder="XXXX-XXXX-…" autocomplete="off" autocapitalize="characters" spellcheck="false" /></label>
+      <div class="row wrap"><button class="btn small accent" id="pf-restore">↺ Восстановить</button></div>
+    </div>
     <div class="pf-out" id="pf-out"></div>`;
   $('pf-name').addEventListener('change', (e) => { settings.name = e.target.value.trim().slice(0, 16); saveSettings(); cloudSync(); });
   const out = (html) => { $('pf-out').innerHTML = html; };
@@ -1921,6 +1924,8 @@ function renderProfile() {
     out(PG.profile.cloud ? `Сохрани этот код — по нему прогресс восстанавливается на любом устройстве. Никому его не показывай:<textarea readonly rows="3">${fmtCode(PG.profile.cloud.token)}</textarea>` : `Сервер недоступен, попробуй позже${sync.error ? ` (${escapeHtml(sync.error)})` : ''}`);
   });
   $('pf-save').addEventListener('click', async () => { out(''); await cloudSyncNow(); });
+  // «Восстановить по коду» — на любом устройстве: открывает поле для кода
+  $('pf-restore-open').addEventListener('click', () => { $('pf-restore-box').classList.toggle('hidden'); out(''); const i = $('pf-restore-code'); if (!$('pf-restore-box').classList.contains('hidden')) i.focus(); });
   let pending = '';
   $('pf-restore').addEventListener('click', async () => {
     const code = normCode($('pf-restore-code').value);
