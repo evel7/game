@@ -165,7 +165,11 @@ audio.setVolume(settings.vol); audio.musicOn = settings.music; audio.sfxVol = se
 const input = new Input();
 input.bindTouch($('touch'));
 addEventListener('pointerdown', () => audio.init(), { once: false });
-addEventListener('keydown', () => audio.init(), { once: true });
+addEventListener('keydown', () => audio.init());
+// звук пропадал после перезахода: браузер приостанавливает AudioContext, когда вкладка скрыта
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') audio.resume(); else audio.silence(); });
+addEventListener('focus', () => audio.resume());
+addEventListener('pageshow', () => audio.resume());
 
 // ======================= мир =======================
 let W_env = null;
@@ -2008,6 +2012,7 @@ function frame(now) {
   handleEvents(evs);
   if (!W) return;
   if (state === 'menu') {
+    audio.silence(); // после заезда мотор в меню больше не гудит
     W.track.update(W.player.veh.idx);
     placePlayerModel(dt);
     W.sun.position.set(W.player.veh.x + W.sunDir.x * 90, W.player.veh.roadY + W.sunDir.y * 90, W.player.veh.z + W.sunDir.z * 90);
