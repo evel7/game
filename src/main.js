@@ -5,7 +5,7 @@ import { CARS, carStats, carClass, CLASSES } from './cars.js';
 import { MAPS } from './maps.js';
 import { Track, SP, CP_EVERY } from './track.js';
 import { Field } from './field.js';
-import { buildCarModel, animateCar, setCarLod } from './carmodel.js';
+import { buildCarModel, animateCar, setCarLod, seatCar } from './carmodel.js';
 import { Rival } from './ai.js';
 import { GameAudio } from './audio.js';
 import { Input } from './input.js';
@@ -292,11 +292,17 @@ function interp() {
   let dh = veh.h - (veh.ph ?? veh.h);
   return { x: L(veh.px, veh.x), z: L(veh.pz, veh.z), h: (veh.ph ?? veh.h) + dh * a, y: L(veh.pY, veh.roadY) };
 }
+// высота поверхности под точкой (для посадки колёс): дорога на 0.02 выше оси трассы, на «Полигоне» — рельеф
+function groundFn(model, hint) {
+  const t = W.track;
+  if (t.isField) return (x, z) => t.heightAt(x, z);
+  // hint — индекс точки трассы рядом с машиной; если его нет (чужие машины онлайн) — берём прошлый найденный
+  return (x, z) => { const r = t.project(x, z, hint ?? model._gi ?? W.player.veh.idx); model._gi = r.idx; return r.y + 0.02; };
+}
 function placePlayerModel(dt) {
   const { veh, model } = W.player;
   const ip = interp();
-  model.root.position.set(ip.x, ip.y + 0.03, ip.z);
-  model.root.rotation.set(-Math.atan(veh.slope || 0), ip.h, Math.atan(veh.roll || 0), 'YXZ');
+  seatCar(model, ip.x, ip.z, ip.h, groundFn(model, veh.idx));
   animateCar(model, veh, dt || 0.016, G && G.braking);
 }
 
@@ -368,8 +374,7 @@ function updateRemote(dt) {
     p.vis = v;
     const m = p.model;
     m.root.visible = true;
-    m.root.position.set(v.x, v.y + 0.03, v.z);
-    m.root.rotation.set(-Math.atan(v.slope || 0), v.h, 0, 'YXZ');
+    seatCar(m, v.x, v.z, v.h, groundFn(m));
     p.wheelSpin += v.spd / m.spec.wheelRadius * dt;
     for (const w of m.wheels) { w.wheel.rotation.x = p.wheelSpin; if (w.front) w.pivot.rotation.y = v.steer; }
     setGhostOpacity(p, Math.hypot(v.x - veh.x, v.z - veh.z));
@@ -727,8 +732,8 @@ function buildGhostCar(g, opacity) {
   return model;
 }
 function placePoseModel(model, pose, dt) {
-  model.root.position.set(pose.x, pose.roadY + 0.03, pose.z);
-  model.root.rotation.set(-Math.atan(pose.slope || 0), pose.h, Math.atan(pose.roll || 0), 'YXZ');
+  if (W.track) seatCar(model, pose.x, pose.z, pose.h, groundFn(model, pose.idx));
+  else { model.root.position.set(pose.x, pose.roadY + 0.03, pose.z); model.root.rotation.set(-Math.atan(pose.slope || 0), pose.h, Math.atan(pose.roll || 0), 'YXZ'); }
   pose.wheelSpin = (pose.wheelSpin || 0) + (pose.speed || 0) * dt / 0.33;
   animateCar(model, pose, dt || 0.016, false);
 }

@@ -583,23 +583,6 @@ export function buildCarModel(spec, color, opts = {}) {
     cyl(pr0 * 0.72, 0.21, M.black, x, rb + 0.0, zR + 0.02, 'z', group, 12);
   }
 
-  // плоская наклейка на борт: ставим по поверхности (борт сужается кверху) и наклоняем под её наклон,
-  // иначе низ наклейки уходит внутрь кузова и её видно только наполовину
-  const sidePlane = (pl, sx, z, y, h, off = 0.008) => {
-    const x0 = sideX(z, y - h / 2), x1 = sideX(z, y + h / 2), xm = sideX(z, y);
-    pl.position.set(sx * (Math.max(xm, (x0 + x1) / 2) + off), y, z);
-    pl.rotation.set(0, sx * Math.PI / 2, 0);
-    pl.rotateOnWorldAxis(new THREE.Vector3(0, 0, 1), sx * Math.atan2(x0 - x1, h));
-    group.add(pl); return pl;
-  };
-  // место под номер на двери: над наклейкой спонсора (rb + 0.17) и под линией окон;
-  // у низких машин места мало — тогда наклейку с двери убираем, а номер ставим на всю высоту двери
-  const numSlot = (() => {
-    const hi = beltY - 0.06, lo = rb + 0.17 + 0.62 / 8 + 0.03;
-    if (hi - lo >= 0.34) { const size = Math.min(0.46, hi - lo); return { size, y: (lo + hi) / 2, sticker: true }; }
-    const lo2 = rb + 0.12, size = Math.max(0.24, Math.min(0.46, hi - lo2));
-    return { size, y: Math.max(lo2 + size / 2, (lo2 + hi) / 2), sticker: false };
-  })();
   // ===== бока =====
   for (const sx of [1, -1]) {
     // зеркала на ножке
@@ -625,18 +608,13 @@ export function buildCarModel(spec, color, opts = {}) {
       flare.rotation.y = Math.PI / 2; flare.position.set(sx * (sideX(z, wr) + 0.005), wr + (b.ride ?? 0), z);
       group.add(flare);
     }
-    // гоночный номер: между наклейкой спонсора на двери и линией окон, наклонён по борту — чтобы не утопал в кузове
+    // гоночный номер
     if (!ex.includes('stripes') || look.decal === 5) {
       const nm = new THREE.MeshStandardMaterial({ map: numberTex(opts.number ?? ((spec.id.length * 17) % 90) + 10, light), transparent: true, roughness: 0.4 });
-      const { size, y } = numSlot;
-      // по длине — середина двери, но не на арке колеса и не на боковом воздухозаборнике
-      const zA = Math.min(b.wheelF, b.wheelR) + wr + 0.2 + size / 2, zB = Math.max(b.wheelF, b.wheelR) - wr - 0.2 - size / 2;
-      let nz = Math.min(zB, Math.max(zA, (dz0 + dz1) / 2));
-      if (ex.includes('intakes') && Math.abs(nz + 0.6) < 0.31 + size / 2 + 0.04) {
-        const f = -0.6 + 0.35 + size / 2, r = -0.6 - 0.35 - size / 2; // воздухозаборник стоит на z = -0.6
-        nz = f <= zB ? f : Math.max(zA, r);
-      }
-      sidePlane(new THREE.Mesh(new THREE.PlaneGeometry(size, size), nm), sx, nz, y, size, 0.01);
+      const pl = new THREE.Mesh(new THREE.PlaneGeometry(0.46, 0.46), nm);
+      const nz = (dz0 + dz1) / 2;
+      const ny = Math.max(0.6, Math.min(beltY - 0.28, yMid + 0.04));
+      pl.position.set(sx * (sideX(nz, ny) + 0.006), ny, nz); pl.rotation.y = sx * Math.PI / 2; group.add(pl);
     }
   }
 
@@ -822,12 +800,12 @@ export function buildCarModel(spec, color, opts = {}) {
     const stick = (k, z, y, w) => {
       for (const sx of [1, -1]) {
         const pl = new THREE.Mesh(new THREE.PlaneGeometry(w, w / 4), new THREE.MeshStandardMaterial({ map: stickerTex(seed + k), transparent: true, roughness: 0.45 }));
-        sidePlane(pl, sx, z, y, w / 4, 0.009);
+        pl.position.set(sx * (sideX(z, y) + 0.007), y, z); pl.rotation.y = sx * Math.PI / 2; group.add(pl);
       }
     };
     stick(0, b.wheelF - 0.02, wr * 2 + 0.16 + (b.ride ?? 0), 0.5);
     stick(1, b.wheelR + 0.05, wr * 2 + 0.17 + (b.ride ?? 0), 0.46);
-    if (numSlot.sticker || (ex.includes('stripes') && look.decal !== 5)) stick(2, (b.wheelF + b.wheelR) / 2 + 0.15, rb + 0.17, 0.62);
+    stick(2, (b.wheelF + b.wheelR) / 2 + 0.15, rb + 0.17, 0.62);
     // красные буксировочные петли
     const towMat = new THREE.MeshStandardMaterial({ color: 0xe01e1e, roughness: 0.5 });
     const tf = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.018, 6, 12), towMat); tf.position.set(-W * 0.3, noseY + 0.02, zF + 0.1); group.add(tf);
@@ -896,6 +874,29 @@ export function buildCarModel(spec, color, opts = {}) {
 }
 
 // переключение детализации: far = true — упрощённая машина без мелких деталей и без отбрасывания тени
+// Посадка машины на дорогу: высоту берём под каждым из 4 колёс и строим по ним плоскость
+// (тангаж и крен), чтобы на перегибах, в ямах и на склонах колёса не утопали в асфальте и не висели.
+// hAt(x, z) — высота поверхности под точкой.
+export function seatCar(model, x, z, h, hAt) {
+  const s = Math.sin(h), c = Math.cos(h);
+  let n = 0, sz = 0, sx = 0, sg = 0, fz = 0, fg = 0, nf = 0, rz = 0, rg = 0, nr = 0, lg = 0, nl = 0, rgx = 0, nrx = 0, tw = 0;
+  const pts = [];
+  for (const w of model.wheels) {
+    const px = w.pivot.position.x, pz = w.pivot.position.z;
+    const g = hAt(x + px * c + pz * s, z - px * s + pz * c);
+    pts.push([px, pz, g]); n++; sz += pz; sx += px; sg += g;
+    if (w.front) { fz += pz; fg += g; nf++; } else { rz += pz; rg += g; nr++; }
+    if (px > 0) { lg += g; nl++; tw = Math.max(tw, px); } else { rgx += g; nrx++; }
+  }
+  const zF = fz / nf, zR = rz / nr;
+  const slope = Math.abs(zF - zR) > 0.1 ? (fg / nf - rg / nr) / (zF - zR) : 0;
+  const roll = tw > 0.1 && nl && nrx ? (lg / nl - rgx / nrx) / (2 * tw) : 0;
+  let y0 = sg / n - slope * (sz / n) - roll * (sx / n), lift = 0;
+  for (const [px, pz, g] of pts) lift = Math.max(lift, g - (y0 + slope * pz + roll * px));
+  model.root.position.set(x, y0 + lift + 0.01, z);
+  model.root.rotation.set(-Math.atan(slope), h, Math.atan(roll), 'YXZ');
+}
+
 export function setCarLod(model, far) {
   if (model.far === far) return;
   model.far = far;

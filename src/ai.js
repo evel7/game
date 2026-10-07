@@ -1,5 +1,6 @@
 import { SP } from './track.js';
 import { clamp } from './utils.js';
+import { seatCar } from './carmodel.js';
 
 // Соперники едут вдоль оси трассы (по параметру fi — дробный индекс точки) со своим смещением по полосе.
 // Скорость ограничивается кривизной впереди (как у настоящего гонщика: v = √(μ·g·R)),
@@ -75,8 +76,9 @@ export class Rival {
     this.slope = p.slope;
     this.wheelSpin += this.v / this.spec.wheelRadius * dt;
     const m = this.model;
-    m.root.position.set(this.x, this.y, this.z);
-    m.root.rotation.set(-Math.atan(this.slope), this.h, 0, 'YXZ');
+    // колёса — на асфальт (раньше машина стояла на оси трассы и утопала в дороге на 2 см, а на перегибах — сильнее)
+    if (track.isField) { m.root.position.set(this.x, this.y, this.z); m.root.rotation.set(-Math.atan(this.slope), this.h, 0, 'YXZ'); }
+    else seatCar(m, this.x, this.z, this.h, (x, z) => { const r = track.project(x, z, this.fi); return r.y + 0.02; });
     for (const w of m.wheels) { w.wheel.rotation.x = this.wheelSpin; if (w.front) w.pivot.rotation.y = this.steer; }
     m.chassis.rotation.z = clamp(p.k * this.v * this.v * 0.008, -0.07, 0.07);
   }
