@@ -10,7 +10,9 @@
 //
 // POST /api/register {name} →
 //   { id, token, recovery, name, profile }
-// POST /api/sync {token, name?, save?, stats?, records?} → { ok: true, improved, profile }
+// POST /api/sync {token, name?, save?, stats?, records?, recreate?, force?} → { ok: true, id, recreated, stale, saveAt, cloudXp, improved, profile }
+//   recreate — если сервер не знает токен (базу пересоздали), создать аккаунт заново с этим токеном (нужен save)
+//   stale    — в облаке сохранение с бОльшим опытом: save НЕ записан (force: true — записать всё равно)
 //   save    — любой JSON прогресса (≤128 КБ), хранится как есть («не потерять прогресс»)
 //   stats   — { level, xp, money, carsOwned, carsTotal, achievements, achievementsTotal, races, wins, losses,
 //               bestScore, bestDrift, maxSpeed (км/ч), distance (метры), modeStats: { [modeId]: { races, wins, best } } }
@@ -98,8 +100,8 @@ export const api = {
     return request('POST', '/api/register', { body: { name }, timeout });
   },
   /** → { ok, improved, profile } */
-  sync({ token, name, save, stats, records } = {}, { timeout = SLOW_TIMEOUT } = {}) {
-    return request('POST', '/api/sync', { body: { name, save, stats, records }, token, timeout });
+  sync({ token, name, save, stats, records, recreate, force } = {}, { timeout = SLOW_TIMEOUT } = {}) {
+    return request('POST', '/api/sync', { body: { name, save, stats, records, recreate: recreate || undefined, force: force || undefined }, token, timeout });
   },
   /** по токену или коду восстановления → { id, name, save, saveAt } */
   restore(token, { timeout = SLOW_TIMEOUT } = {}) {
