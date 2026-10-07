@@ -874,6 +874,29 @@ export function buildCarModel(spec, color, opts = {}) {
 }
 
 // переключение детализации: far = true — упрощённая машина без мелких деталей и без отбрасывания тени
+// Посадка машины на дорогу: высоту берём под каждым из 4 колёс и строим по ним плоскость
+// (тангаж и крен), чтобы на перегибах, в ямах и на склонах колёса не утопали в асфальте и не висели.
+// hAt(x, z) — высота поверхности под точкой.
+export function seatCar(model, x, z, h, hAt) {
+  const s = Math.sin(h), c = Math.cos(h);
+  let n = 0, sz = 0, sx = 0, sg = 0, fz = 0, fg = 0, nf = 0, rz = 0, rg = 0, nr = 0, lg = 0, nl = 0, rgx = 0, nrx = 0, tw = 0;
+  const pts = [];
+  for (const w of model.wheels) {
+    const px = w.pivot.position.x, pz = w.pivot.position.z;
+    const g = hAt(x + px * c + pz * s, z - px * s + pz * c);
+    pts.push([px, pz, g]); n++; sz += pz; sx += px; sg += g;
+    if (w.front) { fz += pz; fg += g; nf++; } else { rz += pz; rg += g; nr++; }
+    if (px > 0) { lg += g; nl++; tw = Math.max(tw, px); } else { rgx += g; nrx++; }
+  }
+  const zF = fz / nf, zR = rz / nr;
+  const slope = Math.abs(zF - zR) > 0.1 ? (fg / nf - rg / nr) / (zF - zR) : 0;
+  const roll = tw > 0.1 && nl && nrx ? (lg / nl - rgx / nrx) / (2 * tw) : 0;
+  let y0 = sg / n - slope * (sz / n) - roll * (sx / n), lift = 0;
+  for (const [px, pz, g] of pts) lift = Math.max(lift, g - (y0 + slope * pz + roll * px));
+  model.root.position.set(x, y0 + lift + 0.01, z);
+  model.root.rotation.set(-Math.atan(slope), h, Math.atan(roll), 'YXZ');
+}
+
 export function setCarLod(model, far) {
   if (model.far === far) return;
   model.far = far;
