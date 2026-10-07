@@ -69,6 +69,14 @@
     <div class="car-spec" id="car-spec"></div>
     <div class="car-buy" id="car-buy"></div>
   </div>
+  <!-- выбор машины списком (онлайн, лобби) -->
+  <div id="car-picker" class="hidden">
+    <div class="cp-box">
+      <div class="cp-head"><h2>Выбор машины</h2><button class="btn small" id="cp-close">✕</button></div>
+      <div class="cp-tools"><div class="seg" id="cp-cls"></div><input type="text" id="cp-search" maxlength="20" placeholder="🔍 Поиск по названию" /></div>
+      <div class="car-grid cp-grid" id="cp-grid"></div>
+    </div>
+  </div>
   <!-- осмотр машины: панели прячутся, камеру крутишь мышью/пальцем -->
   <div id="inspect-bar">
     <div class="ib-hint">Тяни, чтобы крутить · колесо / два пальца — приблизить · двойной клик — автопролёт</div>
@@ -195,6 +203,7 @@
         <div><div class="car-tag">твоя машина</div><div class="lobby-car" id="mm-car"></div></div>
         <button class="btn arrow" id="mm-next">▶</button>
       </div>
+      <button class="btn small pick-btn" data-pick="mm">🚗 Все машины — выбрать из списка</button>
       <div class="opt">Режим <div class="seg" id="mm-mode"></div></div>
       <label class="opt">Длина трассы <select id="mm-len"></select></label>
       <div class="opt">Игроков <div class="seg" id="mm-size"></div></div>
@@ -223,6 +232,7 @@
       <div><div class="car-tag">твоя машина</div><div class="lobby-car" id="lobby-car"></div></div>
       <button class="btn arrow" id="lobby-next">▶</button>
     </div>
+    <button class="btn small pick-btn" data-pick="lobby" id="lobby-pick">🚗 Выбрать из списка</button>
     <div id="lobby-host">
       <label class="opt">Карта <select id="lc-map"></select></label>
       <label class="opt" id="lc-mode-row">Режим <select id="lc-mode"></select></label>
@@ -306,6 +316,6 @@
   <div id="countdown"></div>
   <div id="fps" class="hidden"></div>
 
-  <script src="dist/game.js?v=1791374489235"></script>
+  <script src="dist/game.js?v=1791374962267"></script>
 </body>
 </html>

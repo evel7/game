@@ -1305,8 +1305,7 @@ function pumpThumbs() {
     const k = thumbKey(spec);
     if (!thumbs[k]) {
       try { thumbs[k] = renderThumb(spec); } catch (e) { thumbs[k] = ''; }
-      const img = document.querySelector(`.car-card[data-car="${CARS.indexOf(spec)}"] img`);
-      if (img && thumbs[k]) img.src = thumbs[k];
+      if (thumbs[k]) document.querySelectorAll(`.car-card[data-car="${CARS.indexOf(spec)}"] img`).forEach((img) => { img.src = thumbs[k]; });
     }
     setTimeout(step, 0);
   };
@@ -1570,6 +1569,35 @@ $('mm-len').addEventListener('change', (e) => { sel.mm.len = +e.target.value; sa
 // следующая купленная машина в направлении d
 function nextOwned(from, d) { let i = from; for (let n = 0; n < CARS.length; n++) { i = (i + d + CARS.length) % CARS.length; if (PG.owns(CARS[i])) return i; } return from; }
 function mmCar(d) { sel.car = nextOwned(sel.car, d); sel.ownedCar = sel.car; saveSel(); audio.click(); if (W && state === 'menu') spawnPlayer(6, -2.8); renderOnline(); }
+// ---------- выбор машины списком (быстрый матч и лобби) ----------
+let pickFor = 'mm', pickCls = 'all';
+function openPicker(forWhat) { pickFor = forWhat; $('cp-search').value = ''; renderPicker(); $('car-picker').classList.remove('hidden'); }
+function closePicker() { $('car-picker').classList.add('hidden'); }
+function renderPicker() {
+  const q = $('cp-search').value.trim().toLowerCase();
+  $('cp-cls').innerHTML = [['all', 'Все'], ...CLASSES.map((c) => [c, c])].map(([v, n]) => `<button class="btn small ${pickCls === v ? 'on' : ''}" data-v="${v}">${n}</button>`).join('');
+  $('cp-cls').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { audio.click(); pickCls = b.dataset.v; renderPicker(); }));
+  const list = CARS.map((c, i) => i).filter((i) => PG.owns(CARS[i]))
+    .map((i) => ({ i, cls: PG.tunedClass(CARS[i]), pi: PG.perfIndex(CARS[i]) }))
+    .filter((o) => (pickCls === 'all' || o.cls === pickCls) && (!q || CARS[o.i].name.toLowerCase().includes(q)))
+    .sort((a, b) => CLASSES.indexOf(a.cls) - CLASSES.indexOf(b.cls) || a.pi - b.pi);
+  $('cp-grid').innerHTML = list.length ? list.map(({ i, cls }) => {
+    const c = CARS[i], t = thumbs[thumbKey(c)], tl = PG.tuneLevel(c);
+    return `<div class="car-card ${i === sel.car ? 'sel' : ''}" data-car="${i}"><span class="cls cls-${cls}">${cls}</span><img class="thumb" alt="" ${t ? `src="${t}"` : ''}/><b>${c.name}</b><small>${c.hp} л.с.${tl ? ` · ⚙${tl}` : ''}</small></div>`;
+  }).join('') : '<p class="hint">Нет машин по этому фильтру.</p>';
+  $('cp-grid').querySelectorAll('.car-card').forEach((el) => el.addEventListener('click', () => {
+    sel.car = +el.dataset.car; sel.ownedCar = sel.car; saveSel(); audio.click();
+    if (W && state === 'menu') spawnPlayer(6, -2.8);
+    if (pickFor === 'lobby') { net.send({ t: 'profile', ...myProfile() }); renderLobby(); } else renderOnline();
+    closePicker();
+  }));
+  thumbQueue = list.map((o) => CARS[o.i]).filter((c) => !thumbs[thumbKey(c)]); pumpThumbs();
+}
+document.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => { audio.click(); openPicker(b.dataset.pick); }));
+$('cp-close').addEventListener('click', () => { audio.click(); closePicker(); });
+$('car-picker').addEventListener('click', (e) => { if (e.target.id === 'car-picker') closePicker(); });
+$('cp-search').addEventListener('input', renderPicker);
+addEventListener('keydown', (e) => { if (e.code === 'Escape' && !$('car-picker').classList.contains('hidden')) { e.stopPropagation(); closePicker(); } }, true);
 $('mm-prev').addEventListener('click', () => mmCar(-1));
 $('mm-next').addEventListener('click', () => mmCar(1));
 $('mm-again').addEventListener('click', () => { showScreen('online'); goOnline(mmJoin()); });
@@ -1614,6 +1642,7 @@ function renderLobby() {
   $('lobby-start').classList.toggle('hidden', !host);
   const lockCar = !mm && c && c.car >= 0 && !!CARS[c.car];
   $('lobby-carsw').classList.toggle('hidden', !!mm || lockCar);
+  $('lobby-pick').classList.toggle('hidden', !!mm || lockCar);
   // хост выбрал определённую машину: участник принимает (меняет машину) или выходит
   const needCar = lockCar && !host && sel.car !== c.car;
   $('lobby-carreq').classList.toggle('hidden', !needCar);

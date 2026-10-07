@@ -265,7 +265,7 @@ h3 { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; margin: 12
 .ptable.lb tr[data-pid] { cursor: pointer; } .ptable.lb tr[data-pid]:hover { background: rgba(255,204,0,.12); }
 .ptable tr.me { background: rgba(122,229,130,.15); }
 .pf-out textarea { width: 100%; height: 70px; margin-top: 6px; background: #111; color: #9fe8ff; border: 1px solid #444; border-radius: 6px; font-size: 11px; padding: 6px; user-select: text; -webkit-user-select: text; }
-#pf-name, #lb-search { background: #1c1c28; color: #fff; border: 1px solid #444; border-radius: 6px; padding: 6px 8px; font-size: 14px; }
+#pf-name, #lb-search, #cp-search { background: #1c1c28; color: #fff; border: 1px solid #444; border-radius: 6px; padding: 6px 8px; font-size: 14px; }
 #lb-search { max-width: 320px; }
 .ach { display: flex; justify-content: space-between; gap: 10px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08); border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; }
 .ach > div { flex: 1; } .ach b { font-size: 14px; } .ach small { display: block; opacity: .7; font-size: 12px; } .ach .xpbar { margin: 4px 0 2px; }
@@ -296,3 +296,16 @@ h3 { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; margin: 12
 body.inspect #inspect-bar { display: flex; }
 body.inspect #menu-garage, body.inspect #menu-tune, body.inspect #garage-info { display: none !important; }
 body.inspect #game { cursor: grab; }
+
+/* выбор машины списком */
+#car-picker { position: fixed; inset: 0; z-index: 40; background: rgba(5,5,12,.72); display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
+#car-picker.hidden { display: none; }
+#car-picker .cp-box { width: min(980px, 96vw); height: min(720px, 92vh); background: rgba(18,18,30,.96); border: 1px solid rgba(255,255,255,.12); border-radius: 16px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+#car-picker .cp-head { display: flex; align-items: center; justify-content: space-between; }
+#car-picker .cp-head h2 { margin: 0; }
+#car-picker .cp-tools { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+#car-picker .cp-tools input { flex: 1 1 180px; }
+#car-picker .cp-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+#car-picker .car-card .cls { position: absolute; top: 6px; left: 6px; }
+#car-picker .car-card small { display: block; font-size: 10px; opacity: .7; }
+.pick-btn { width: 100%; margin-top: 6px; }
