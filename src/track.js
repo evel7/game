@@ -229,12 +229,7 @@ export class Track {
     const h = a.h + (bpt.h - a.h) * t;
     const lx = Math.cos(h), lz = -Math.sin(h);
     const lat = (x - px) * lx + (z - pz) * lz;
-    // уклон — плавно между точками (среднее соседних отрезков), иначе он скачет каждые 2 м и трясёт камеру/кузов
-    const s1 = (bpt.y - a.y) / SP;
-    const s0 = i - 1 >= this.base ? (a.y - this.P(i - 1).y) / SP : s1;
-    const s2 = i + 2 <= this.lastIdx ? (this.P(i + 2).y - bpt.y) / SP : s1;
-    const slope = (s0 + s1) / 2 * (1 - t) + (s1 + s2) / 2 * t;
-    return { idx: i + t, lat, y: a.y + (bpt.y - a.y) * t, h, lx, lz, slope, k: a.k };
+    return { idx: i + t, lat, y: a.y + (bpt.y - a.y) * t, h, lx, lz, slope: (bpt.y - a.y) / SP, k: a.k };
   }
 
   // высота рельефа рядом с трассой: p — точка оси, off — расстояние от оси (±)
