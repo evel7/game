@@ -235,6 +235,25 @@ function aoTex() {
   })();
 }
 
+function glowTex() {
+  return texCache.glow ||= (() => {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 64;
+    const c = cv.getContext('2d'), g = c.createRadialGradient(32, 32, 2, 32, 32, 32);
+    g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.25, 'rgba(255,255,255,0.55)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = g; c.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(cv);
+  })();
+}
+function beamTex() { // мягкое пятно света фар на дороге
+  return texCache.beam ||= (() => {
+    const cv = document.createElement('canvas'); cv.width = 64; cv.height = 128;
+    const c = cv.getContext('2d'), g = c.createRadialGradient(32, 128, 4, 32, 90, 90);
+    g.addColorStop(0, 'rgba(255,255,255,0.9)'); g.addColorStop(0.5, 'rgba(255,255,255,0.35)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = g; c.fillRect(0, 0, 64, 128);
+    return new THREE.CanvasTexture(cv);
+  })();
+}
+
 // Склеивает все неподвижные детали группы в один меш на каждый материал.
 // Машина остаётся такой же детальной, но рисуется за ~20 вызовов вместо ~150 — сильно меньше нагрузки.
 function mergeByMaterial(root) {
@@ -396,6 +415,16 @@ export function buildCarModel(spec, color, opts = {}) {
   roofShape.moveTo(-roofLen / 2, 0); roofShape.lineTo(roofLen / 2, 0); roofShape.lineTo(roofLen / 2 - 0.04, 0.05); roofShape.lineTo(-roofLen / 2 + 0.04, 0.06); roofShape.closePath();
   const roofG = extrude(roofShape, cabX(roofY) * 2 + 0.04, 0.02, 2);
   const roof = new THREE.Mesh(roofG, bodyMat); roof.position.set(0, roofY - 0.02, roofZ); roof.castShadow = true; group.add(roof);
+  // ---- щупы по реальной поверхности кузова: навесные детали садятся точно на кузов любой формы ----
+  for (const m of [body, cabin, roof]) m.updateMatrixWorld(true);
+  const _rc = new THREE.Raycaster(), _o = new THREE.Vector3(), _d = new THREE.Vector3();
+  const topAt = (x, z, objs = [body], fb = b.upper[3][1]) => { _rc.set(_o.set(x, 20, z), _d.set(0, -1, 0)); const h = _rc.intersectObjects(objs, false)[0]; return h ? h.point.y : fb; };
+  // брусок на поверхности: высота по кузову в двух точках, наклон — по уклону поверхности
+  const onTop = (w, h, len, mat, x, zc, lift = 0.004, parent = group) => {
+    const y1 = topAt(x, zc - len / 2), y2 = topAt(x, zc + len / 2), y0 = topAt(x, zc);
+    const m = box(w, h, len, mat, x, Math.max((y1 + y2) / 2, y0 - 0.01) + h / 2 + lift, zc, parent);
+    m.rotation.x = -Math.atan2(y2 - y1, len); return m;
+  };
   // стойки A / B / C
   for (const sx of [1, -1]) {
     const P = (z, y, o = 0.012) => new THREE.Vector3(sx * (cabX(y) + o), y, z);
@@ -442,15 +471,28 @@ export function buildCarModel(spec, color, opts = {}) {
   const frontY = (b.upper[0][1] + b.upper[1][1]) / 2 + 0.06;
   const rearIdx = b.upper.length - 2;
   const rearY = (b.upper[rearIdx][1] + b.upper[rearIdx + 1][1]) / 2 + 0.08;
-  const headMat = new THREE.MeshStandardMaterial({ color: 0xfff6d8, emissive: 0xfff2c0, emissiveIntensity: opts.night ? 2.4 : 0.5, roughness: 0.15 });
+  const headMat = new THREE.MeshStandardMaterial({ color: 0xfff6d8, emissive: 0xfff2c0, emissiveIntensity: opts.night ? 3.2 : 1.1, roughness: 0.15 });
   const tailMat = new THREE.MeshStandardMaterial({ color: 0x6a0808, emissive: 0xff1a1a, emissiveIntensity: opts.night ? 1.2 : 0.35, roughness: 0.25 });
   const fW = W * 0.92; // ширина носа после сужения
+  // капот: от основания лобового стекла до носа
+  const hood0 = c[0][0] + 0.06, hood1 = zF - 0.14, hoodLen = Math.max(0.2, hood1 - hood0), hoodC = (hood0 + hood1) / 2;
+  // кабина доходит почти до кормы — хэтчбек, универсал, фургон: крылья ставим на край крыши
+  let hatch = c[c.length - 1][0] < zR + 0.5;
+  // настоящий верх крыши (у фургона-будки кузов выше кабины — багажник и воздухозаборник ставим на него)
+  const roofTop = Math.max(roofY + 0.04, topAt(0, roofZ, [body, roof, cabin], roofY)) - 0.04;
   let ex = b.extras || [];
   // тюнинг антикрыла и винила меняет набор деталей кузова
   if (look.wing) { ex = ex.filter((e) => !WINGS.includes(e)); const w = [null, null, 'ducktail', 'wing', 'roofwing', 'bigwing'][look.wing]; if (w) ex = [...ex, w]; }
   if (look.decal === 1 || look.decal === 5) ex = [...ex, 'stripes'];
   if (look.light && LIGHT_HEX[look.light] != null) { headMat.color.set(LIGHT_HEX[look.light]); headMat.emissive.set(LIGHT_HEX[look.light]); }
+  // ореол вокруг фар: плоскости с аддитивным смешиванием, склеиваются в один меш — почти бесплатно
+  const glowMat = new THREE.MeshBasicMaterial({ map: glowTex(), color: headMat.emissive, transparent: true, opacity: opts.night ? 0.95 : 0.4, blending: THREE.AdditiveBlending, depthWrite: false });
+  const glow = (x, y, z, w, h = w * 0.7) => { const g = new THREE.Mesh(new THREE.PlaneGeometry(w, h), glowMat); g.position.set(x, y, z); g.renderOrder = 4; group.add(g); };
   let underglow = null;
+  const bm = opts.night ? new THREE.MeshBasicMaterial({ map: beamTex(), color: headMat.emissive, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false }) : null;
+  if (opts.night) for (const sx of [1, -1]) { // световые пятна фар на асфальте
+    const bp = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 7), bm); bp.rotation.x = -Math.PI / 2; bp.position.set(sx * W * 0.25, 0.045, zF + 3.4); bp.renderOrder = 2; bp.userData.beam = true; group.add(bp);
+  }
 
   if (ex.includes('popups')) {
     for (const sx of [1, -1]) {
@@ -464,6 +506,7 @@ export function buildCarModel(spec, color, opts = {}) {
       const hx = sx * fW * 0.34, hy = b.upper[2][1] - 0.02, hz = zF - 0.32;
       cyl(0.12, 0.2, bodyMat, hx, hy, hz, 'z', group, 20);
       cyl(0.1, 0.03, headMat, hx, hy, hz + 0.1, 'z', group, 20);
+      glow(hx, hy, hz + 0.13, 0.5, 0.5);
     }
   }
   const wedge = b.upper[1][1] - b.upper[0][1] < 0.2;
@@ -475,7 +518,8 @@ export function buildCarModel(spec, color, opts = {}) {
     const slope = Math.atan2(b.upper[2][1] - b.upper[1][1], b.upper[1][0] - b.upper[2][0]);
     for (const sx of [1, -1]) {
       const h1 = box(0.46, 0.03, 0.2, M.gloss, sx * fW * 0.32, yy + 0.09, zz, group); h1.rotation.x = slope;
-      const h2 = box(0.4, 0.035, 0.05, headMat, sx * fW * 0.32, yy + 0.1, zz + 0.07, group); h2.rotation.x = slope;
+      const h2 = box(0.42, 0.05, 0.06, headMat, sx * fW * 0.32, yy + 0.105, zz + 0.07, group); h2.rotation.x = slope;
+      glow(sx * fW * 0.32, yy + 0.12, zz + 0.12, 0.75, 0.32);
     }
   }
   for (const sx of (ex.includes('roundlights') || wedge ? [] : [1, -1])) {
@@ -483,6 +527,7 @@ export function buildCarModel(spec, color, opts = {}) {
     const hx = sx * fW * 0.33;
     box(0.44, 0.15, 0.08, M.gloss, hx, frontY, zF - 0.02, group);
     box(0.36, 0.07, 0.03, headMat, hx + sx * 0.03, frontY + 0.01, zF + 0.02, group);
+    glow(hx + sx * 0.03, frontY + 0.01, zF + 0.05, 0.7, 0.36);
     cyl(0.04, 0.03, M.chrome, hx - sx * 0.12, frontY, zF + 0.025, 'z', group, 14);
     box(0.44, 0.15, 0.01, M.lensClear, hx, frontY, zF + 0.035, group);
     box(0.1, 0.035, 0.02, M.amber, hx + sx * 0.16, frontY - 0.055, zF + 0.03, group);
@@ -523,9 +568,9 @@ export function buildCarModel(spec, color, opts = {}) {
   box(W * 0.94, 0.07, 0.14, st.chromeBumpers ? M.chrome : M.trim, 0, rb + 0.01, zR + 0.01, group);
   const pr = new THREE.Mesh(new THREE.PlaneGeometry(0.44, 0.1), plateMat); pr.position.set(0, rearY - 0.16, zR - 0.01); pr.rotation.y = Math.PI; group.add(pr);
   // диффузор
-  if (ex.includes('wing') || ex.includes('intakes')) {
-    box(W * 0.7, 0.08, 0.2, M.carbon, 0, rb - 0.02, zR + 0.05, group);
-    for (let k = -2; k <= 2; k++) box(0.015, 0.1, 0.22, M.carbon, k * W * 0.13, rb - 0.02, zR + 0.03, group);
+  if ((ex.includes('wing') || ex.includes('intakes')) && !look.rear) {
+    box(W * 0.7, 0.03, 0.24, M.carbon, 0, rb - 0.04, zR + 0.12, group);
+    for (let k = -2; k <= 2; k++) box(0.015, 0.08, 0.2, M.carbon, k * W * 0.13, rb - 0.07, zR + 0.11, group);
   }
   // выхлоп
   let pipes = spec.id === 'veloce' ? [[0.06, 0], [-0.06, 0]] : spec.cylinders >= 6 ? [[W * 0.3, 0], [W * 0.36, 0], [-W * 0.3, 0], [-W * 0.36, 0]] : [[W * 0.3, 0]];
@@ -568,39 +613,53 @@ export function buildCarModel(spec, color, opts = {}) {
       const nm = new THREE.MeshStandardMaterial({ map: numberTex(opts.number ?? ((spec.id.length * 17) % 90) + 10, light), transparent: true, roughness: 0.4 });
       const pl = new THREE.Mesh(new THREE.PlaneGeometry(0.46, 0.46), nm);
       const nz = (dz0 + dz1) / 2;
-      pl.position.set(sx * (sideX(nz, 0.66) + 0.006), 0.66, nz); pl.rotation.y = sx * Math.PI / 2; group.add(pl);
+      const ny = Math.max(0.6, Math.min(beltY - 0.28, yMid + 0.04));
+      pl.position.set(sx * (sideX(nz, ny) + 0.006), ny, nz); pl.rotation.y = sx * Math.PI / 2; group.add(pl);
     }
   }
 
   // ===== индивидуальные детали =====
   // высота крышки багажника/моторного отсека — самая высокая точка кузова позади кабины
   const deckY = Math.max(...b.upper.filter((q) => q[0] < c[c.length - 1][0] + 0.05).map((q) => q[1]));
-  if (ex.includes('wing')) {
-    const wingShape = new THREE.Shape();
-    wingShape.moveTo(0, 0); wingShape.lineTo(0.36, 0.02); wingShape.lineTo(0.34, 0.05); wingShape.lineTo(0.02, 0.04); wingShape.closePath();
-    const wg = extrude(wingShape, W * 0.95, 0.01, 1);
-    const wing = new THREE.Mesh(wg, spec.id === 'ronin' ? M.carbon : bodyMat);
-    wing.rotation.y = Math.PI; wing.position.set(0, deckY + 0.32, zR + 0.46); wing.castShadow = true; group.add(wing);
+  // высота крышки багажника там, где стоят стойки крыла (по реальной поверхности кузова)
+  const deckAt = (z) => topAt(0, z, [body], deckY);
+  if (hatch && roofY - deckAt(zR + 0.3) > 0.4) hatch = false; // низкая крышка мотора за кабиной (суперкар) — крыло на корме
+  const wingProfile = (len, th, w, mat) => {
+    const sh = new THREE.Shape();
+    sh.moveTo(0, 0); sh.lineTo(len, th * 0.4); sh.lineTo(len * 0.95, th); sh.lineTo(len * 0.05, th * 0.8); sh.closePath();
+    const m = new THREE.Mesh(extrude(sh, w, 0.01, 1), mat); m.rotation.y = Math.PI; m.castShadow = true; return m;
+  };
+  // крыло на краю крыши (для хэтчбеков и фургонов): на стойках над задней кромкой крыши
+  const roofEdgeWing = (big) => {
+    const ry = topAt(0, c[2][0] + 0.15, [body, roof, cabin], roofY), h = big ? 0.2 : 0.13, len = big ? 0.42 : 0.32, zc = c[2][0] - 0.02;
+    const wm = big ? M.carbon : bodyMat, ww = cabX(roofY) * 2 + (big ? 0.2 : 0.08);
+    const w = wingProfile(len, 0.05, ww, wm); w.position.set(0, ry + h, zc + len / 2); group.add(w);
     for (const sx of [1, -1]) {
-      box(0.03, 0.3, 0.12, M.gloss, sx * W * 0.3, deckY + 0.16, zR + 0.3, group);
-      box(0.015, 0.16, 0.42, spec.id === 'ronin' ? M.carbon : bodyMat, sx * W * 0.475, deckY + 0.33, zR + 0.28, group);
+      strut(new THREE.Vector3(sx * ww * 0.3, ry, zc + 0.12), new THREE.Vector3(sx * ww * 0.3, ry + h + 0.02, zc + 0.1), 0.03, M.gloss, group);
+      box(0.015, big ? 0.11 : 0.07, len * 0.85, wm, sx * ww / 2, ry + h + 0.025, zc, group);
     }
+  };
+  if (ex.includes('wing') && hatch) roofEdgeWing(false);
+  else if (ex.includes('wing')) {
+    const dy = deckAt(zR + 0.3);
+    const wing = wingProfile(0.36, 0.05, W * 0.95, spec.id === 'ronin' ? M.carbon : bodyMat);
+    wing.position.set(0, dy + 0.32, zR + 0.46); group.add(wing);
+    for (const sx of [1, -1]) {
+      box(0.03, 0.32, 0.12, M.gloss, sx * W * 0.3, dy + 0.16, zR + 0.3, group);
+      box(0.015, 0.16, 0.42, spec.id === 'ronin' ? M.carbon : bodyMat, sx * W * 0.475, dy + 0.33, zR + 0.28, group);
+    }
+  } else if (ex.includes('ducktail') && hatch) {
+    box(cabX(roofY) * 2 + 0.06, 0.035, 0.22, bodyMat, 0, topAt(0, c[2][0] + 0.1, [roof, cabin], roofY) + 0.02, c[2][0] - 0.05, group);
   } else if (ex.includes('ducktail')) {
-    box(W * 0.88, 0.05, 0.16, bodyMat, 0, deckY + 0.04, zR + 0.13, group);
-  }
-  if (ex.includes('roofwing')) {
-    box(cabX(roofY) * 2 + 0.06, 0.035, 0.28, bodyMat, 0, roofY + 0.07, c[2][0] - 0.1, group);
-    for (const sx of [1, -1]) box(0.02, 0.1, 0.26, bodyMat, sx * (cabX(roofY) + 0.03), roofY + 0.04, c[2][0] - 0.1, group);
+    const dz = zR + 0.14; onTop(W * 0.86, 0.05, 0.18, bodyMat, 0, dz, -0.005);
   }
   if (ex.includes('scoop')) {
-    const hz = (b.upper[2][0] + c[0][0]) / 2;
-    box(0.55, 0.1, 0.75, bodyMat, 0, b.upper[3][1] + 0.05, hz, group);
-    const sc = new THREE.Mesh(new THREE.PlaneGeometry(0.46, 0.07), grilleMat); sc.position.set(0, b.upper[3][1] + 0.06, hz + 0.38); group.add(sc);
+    const sl = Math.min(0.75, hoodLen * 0.6), sb = onTop(0.55, 0.09, sl, bodyMat, 0, hoodC, -0.01);
+    const sc = new THREE.Mesh(new THREE.PlaneGeometry(0.46, 0.06), grilleMat); sc.position.set(0, 0.005, sl / 2 + 0.003); sb.add(sc);
   }
   if (spec.id === 'ronin') {
     // вентиляционные жабры на капоте
-    const hz = (b.upper[2][0] + c[0][0]) / 2;
-    for (const sx of [1, -1]) for (let k = 0; k < 4; k++) box(0.22, 0.012, 0.03, M.gloss, sx * 0.32, b.upper[3][1] + 0.02, hz - 0.12 + k * 0.08, group);
+    for (const sx of [1, -1]) for (let k = 0; k < 4; k++) onTop(0.22, 0.012, 0.03, M.gloss, sx * 0.32, hoodC - 0.12 + k * 0.08);
     box(W * 0.9, 0.025, 0.1, M.carbon, 0, noseY - 0.04, zF + 0.06, group);
   }
   if (spec.id === 'veloce') {
@@ -616,28 +675,31 @@ export function buildCarModel(spec, color, opts = {}) {
     it.position.set(sx * (sideX(-0.6, 0.55) + 0.006), 0.55, -0.6); it.rotation.y = sx * Math.PI / 2; group.add(it);
   }
   if (ex.includes('stripes')) for (const sx of [0.13, -0.13]) {
-    const hood = box(0.16, 0.008, Math.abs(zF - c[0][0]), accentMat, sx, 0, (zF + c[0][0]) / 2, group);
-    hood.position.y = b.upper[3][1] + 0.03;
-    box(0.16, 0.008, roofLen, accentMat, sx, roofY + 0.045, roofZ, group);
-    box(0.16, 0.008, Math.abs(c[3][0] - zR), accentMat, sx, deckY + 0.012, (c[3][0] + zR) / 2, group);
+    // полосы по капоту — кусками, чтобы повторять изгиб
+    const sl = hoodLen + 0.1, n = Math.max(4, Math.ceil(sl / 0.1));
+    for (let k = 0; k < n; k++) onTop(0.16, 0.008, sl / n + 0.02, accentMat, sx, hood0 - 0.05 + sl * (k + 0.5) / n, 0.003);
+    if (roofTop < roofY + 0.06) box(0.16, 0.008, roofLen, accentMat, sx, roofY + 0.045, roofZ, group); // у фургона-будки крыша спрятана в кузове
+    const dl = Math.abs(c[3][0] - zR) - 0.12, dn = Math.max(3, Math.ceil(dl / 0.1));
+    if (dl > 0.25) for (let k = 0; k < dn; k++) onTop(0.16, 0.008, dl / dn + 0.02, accentMat, sx, zR + 0.06 + dl * (k + 0.5) / dn, 0.003);
   }
   if (ex.includes('rallylights')) {
     box(W * 0.7, 0.03, 0.05, M.gloss, 0, frontY + 0.12, zF + 0.1, group);
     for (const sx of [0.3, 0.1, -0.1, -0.3]) {
       cyl(0.085, 0.07, M.gloss, sx * W, frontY + 0.05, zF + 0.12, 'z', group, 16);
       cyl(0.07, 0.075, headMat, sx * W, frontY + 0.05, zF + 0.125, 'z', group, 16);
+      glow(sx * W, frontY + 0.05, zF + 0.17, 0.36, 0.36);
     }
   }
-  if (ex.includes('bigwing')) {
-    // огромное тайм-аттак крыло на «лебединых шеях»: широкий профиль, высокие торцевые пластины
-    const bw = new THREE.Shape();
-    bw.moveTo(0, 0); bw.lineTo(0.5, 0.03); bw.lineTo(0.48, 0.07); bw.lineTo(0.03, 0.06); bw.closePath();
-    const bwing = new THREE.Mesh(extrude(bw, W * 1.02, 0.01, 1), M.carbon);
-    bwing.rotation.y = Math.PI; bwing.position.set(0, deckY + 0.5, zR + 0.62); bwing.castShadow = true; group.add(bwing);
-    box(W * 1.0, 0.04, 0.025, bodyMat, 0, deckY + 0.565, zR + 0.13, group); // гурни-флап
+  if (ex.includes('bigwing') && hatch) roofEdgeWing(true);
+  else if (ex.includes('bigwing')) {
+    // большое тайм-аттак крыло на «лебединых шеях»: широкий профиль, торцевые пластины
+    const dy = deckAt(zR + 0.4);
+    const bwing = wingProfile(0.48, 0.07, W * 1.0, M.carbon);
+    bwing.position.set(0, dy + 0.46, zR + 0.6); group.add(bwing);
+    box(W * 0.98, 0.035, 0.02, bodyMat, 0, dy + 0.52, zR + 0.13, group); // гурни-флап
     for (const sx of [1, -1]) {
-      strut(new THREE.Vector3(sx * W * 0.22, deckY + 0.01, zR + 0.45), new THREE.Vector3(sx * W * 0.22, deckY + 0.56, zR + 0.3), 0.04, M.gloss, group);
-      box(0.018, 0.34, 0.62, bodyMat, sx * W * 0.51, deckY + 0.5, zR + 0.32, group);
+      strut(new THREE.Vector3(sx * W * 0.22, dy, zR + 0.42), new THREE.Vector3(sx * W * 0.22, dy + 0.52, zR + 0.3), 0.035, M.gloss, group);
+      box(0.016, 0.22, 0.52, bodyMat, sx * W * 0.5, dy + 0.47, zR + 0.36, group);
     }
   }
   if (ex.includes('sidepipes')) for (const sx of [1, -1]) {
@@ -665,61 +727,59 @@ export function buildCarModel(spec, color, opts = {}) {
   }
 
   // ===== внешний тюнинг игрока (opts.look) =====
-  if (look.hood === 1) box(W * 0.72, 0.014, Math.abs(zF - c[0][0]) * 0.8, M.carbon, 0, b.upper[3][1] + 0.028, (zF + c[0][0]) / 2, group);
+  if (look.hood === 1) onTop(W * 0.68, 0.012, hoodLen * 0.9, M.carbon, 0, hoodC, 0.002);
   if (look.hood === 2) {
-    const hz = (b.upper[2][0] + c[0][0]) / 2;
-    box(0.5, 0.09, 0.62, bodyMat, 0, b.upper[3][1] + 0.05, hz, group);
-    const sc = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.06), grilleMat); sc.position.set(0, b.upper[3][1] + 0.06, hz + 0.315); group.add(sc);
+    const sl = Math.min(0.62, hoodLen * 0.55), sb = onTop(0.5, 0.085, sl, bodyMat, 0, hoodC, -0.01);
+    const sc = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.055), grilleMat); sc.position.set(0, 0.005, sl / 2 + 0.003); sb.add(sc);
   }
-  if (look.hood === 3) {
-    const hz = (b.upper[2][0] + c[0][0]) / 2;
-    for (const sx of [1, -1]) for (let k = 0; k < 5; k++) box(0.24, 0.014, 0.03, M.gloss, sx * W * 0.2, b.upper[3][1] + 0.03, hz - 0.16 + k * 0.08, group);
-  }
-  if (look.bumper === 1) box(W * 1.0, 0.025, 0.2, M.carbon, 0, noseY - 0.05, zF + 0.07, group);
+  if (look.hood === 3) for (const sx of [1, -1]) for (let k = 0; k < 5; k++) onTop(0.24, 0.014, 0.03, M.gloss, sx * W * 0.2, hoodC - 0.16 + k * 0.08, 0.002);
+  if (look.bumper === 1) box(W * 0.96, 0.022, 0.16, M.carbon, 0, noseY - 0.05, zF + 0.05, group);
   if (look.bumper === 2) {
-    box(W * 1.04, 0.035, 0.26, M.carbon, 0, noseY - 0.055, zF + 0.1, group);
+    box(W * 1.0, 0.028, 0.18, M.carbon, 0, noseY - 0.055, zF + 0.06, group);
     for (const sx of [1, -1]) {
-      box(0.02, 0.12, 0.24, M.carbon, sx * W * 0.52, noseY - 0.0, zF + 0.06, group);
-      const cn = box(0.3, 0.018, 0.16, M.carbon, sx * W * 0.45, noseY + 0.16, zF - 0.02, group); cn.rotation.z = sx * 0.3;
+      box(0.018, 0.08, 0.16, M.carbon, sx * W * 0.5, noseY - 0.02, zF + 0.05, group);
+      const cn = box(0.24, 0.015, 0.12, M.carbon, sx * W * 0.43, noseY + 0.16, zF - 0.02, group); cn.rotation.z = sx * 0.3;
     }
   }
   if (look.bumper === 3) {
-    const sk = box(W * 0.7, 0.03, 0.4, M.chrome, 0, noseY - 0.06, zF - 0.05, group); sk.rotation.x = -0.25;
-    for (const sx of [1, -1]) box(0.06, 0.2, 0.06, M.gloss, sx * W * 0.36, noseY + 0.04, zF + 0.08, group);
+    const sk = box(W * 0.7, 0.025, 0.34, M.chrome, 0, noseY - 0.05, zF - 0.06, group); sk.rotation.x = -0.25;
+    for (const sx of [1, -1]) box(0.05, 0.18, 0.05, M.gloss, sx * W * 0.36, noseY + 0.04, zF + 0.06, group);
   }
   if (look.skirts) {
     const skL = Math.abs(b.wheelF - b.wheelR) - (wr + 0.1) * 2;
     for (const sx of [1, -1]) {
-      box(look.skirts === 2 ? 0.16 : 0.1, 0.12, skL + 0.04, look.skirts === 2 ? bodyMat : M.carbon, sx * (sideX(0, rb) + (look.skirts === 2 ? 0.06 : 0.03)), rb + 0.03, (b.wheelF + b.wheelR) / 2, group);
+      box(look.skirts === 2 ? 0.14 : 0.09, 0.11, skL + 0.04, look.skirts === 2 ? bodyMat : M.carbon, sx * (sideX(0, rb) + (look.skirts === 2 ? 0.05 : 0.025)), rb + 0.03, (b.wheelF + b.wheelR) / 2, group);
       if (look.skirts === 2) for (const z of [b.wheelF, b.wheelR]) {
-        const fl = new THREE.Mesh(new THREE.TorusGeometry(wr + 0.1, 0.06, 6, 20, Math.PI), bodyMat);
-        fl.rotation.y = Math.PI / 2; fl.position.set(sx * (sideX(z, wr) + 0.04), wr + (b.ride ?? 0), z); group.add(fl);
+        const fl = new THREE.Mesh(new THREE.TorusGeometry(wr + 0.1, 0.05, 6, 20, Math.PI), bodyMat);
+        fl.rotation.y = Math.PI / 2; fl.position.set(sx * (sideX(z, wr) + 0.035), wr + (b.ride ?? 0), z); group.add(fl);
       }
     }
   }
   if (look.rear) {
-    box(W * 0.78, 0.09, 0.24, M.carbon, 0, rb - 0.03, zR + 0.05, group);
+    // диффузор под задним бампером: не торчит за корму
+    box(W * 0.78, 0.03, 0.26, M.carbon, 0, rb - 0.045, zR + 0.13, group);
     const fins = look.rear === 2 ? 4 : 2;
-    for (let k = -fins; k <= fins; k++) box(0.015, look.rear === 2 ? 0.18 : 0.11, 0.26, M.carbon, k * W * 0.32 / fins, rb - 0.02, zR + 0.02, group);
+    for (let k = -fins; k <= fins; k++) box(0.015, look.rear === 2 ? 0.12 : 0.08, 0.22, M.carbon, k * W * 0.34 / fins, rb - 0.045 - (look.rear === 2 ? 0.06 : 0.04), zR + 0.12, group);
   }
   if (look.roof === 1) {
-    for (const sx of [1, -1]) box(0.03, 0.03, roofLen * 0.9, M.gloss, sx * cabX(roofY) * 0.8, roofY + 0.09, roofZ, group);
-    for (const zz of [-0.3, 0, 0.3]) box(cabX(roofY) * 1.7, 0.02, 0.03, M.gloss, 0, roofY + 0.1, roofZ + zz * roofLen, group);
+    for (const sx of [1, -1]) box(0.03, 0.03, roofLen * 0.9, M.gloss, sx * cabX(roofY) * 0.8, roofTop + 0.09, roofZ, group);
+    for (const zz of [-0.3, 0, 0.3]) box(cabX(roofY) * 1.7, 0.02, 0.03, M.gloss, 0, roofTop + 0.1, roofZ + zz * roofLen, group);
   }
   if (look.roof === 2) {
-    box(0.34, 0.08, 0.38, bodyMat, 0, roofY + 0.07, roofZ + 0.2, group);
-    const rs = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.05), grilleMat); rs.position.set(0, roofY + 0.07, roofZ + 0.391); group.add(rs);
+    box(0.34, 0.08, 0.38, bodyMat, 0, roofTop + 0.07, roofZ + 0.2, group);
+    const rs = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.05), grilleMat); rs.position.set(0, roofTop + 0.07, roofZ + 0.391); group.add(rs);
   }
-  if (look.roof === 3 || look.decal === 4) box(cabX(roofY) * 2 + 0.03, 0.012, roofLen, look.roof === 3 ? M.carbon : M.gloss, 0, roofY + 0.045, roofZ, group);
+  if (look.roof === 3 || look.decal === 4) box(cabX(roofY) * 2 + 0.03, 0.012, roofLen, look.roof === 3 ? M.carbon : M.gloss, 0, roofTop + 0.045, roofZ, group);
   if (look.decal === 3) for (const sx of [1, -1]) {
     // полоса по борту
     box(0.006, 0.07, L * 0.78, accentMat, sx * (sideX(0, rb + 0.22) + 0.008), rb + 0.22, 0, group);
   }
-  if (look.decal === 2 || look.decal === 5) {
+  if (look.decal === 2) {
     // номер на капоте
     const nm = new THREE.MeshStandardMaterial({ map: numberTex(opts.number ?? ((spec.id.length * 17) % 90) + 10, light), transparent: true, roughness: 0.4 });
     const hn = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.42), nm);
-    hn.rotation.x = -Math.PI / 2; hn.position.set(0, b.upper[3][1] + 0.04, (zF + c[0][0]) / 2); group.add(hn);
+    const hy1 = topAt(0, hoodC - 0.2), hy2 = topAt(0, hoodC + 0.2);
+    hn.rotation.x = -Math.PI / 2 - Math.atan2(hy2 - hy1, 0.4); hn.position.set(0, topAt(0, hoodC) + 0.008, hoodC); group.add(hn);
   }
   if (look.glow) {
     // неоновая подсветка днища: дешёвая плоскость с аддитивным смешиванием, без источников света
@@ -755,7 +815,7 @@ export function buildCarModel(spec, color, opts = {}) {
       const cn = box(0.22, 0.015, 0.12, M.carbon, sx * W * 0.42, noseY + 0.12, zF - 0.05, group); cn.rotation.z = sx * 0.25;
     }
     // пины капота
-    for (const sx of [1, -1]) cyl(0.02, 0.02, M.chrome, sx * W * 0.3, b.upper[3][1] + 0.015, zF - 0.25, 'y', group, 8);
+    for (const sx of [1, -1]) cyl(0.02, 0.02, M.chrome, sx * W * 0.3, topAt(sx * W * 0.3, zF - 0.25) + 0.005, zF - 0.25, 'y', group, 8);
   }
 
   // днище
@@ -801,7 +861,7 @@ export function buildCarModel(spec, color, opts = {}) {
 
   // LOD для далёких машин: мелкие детали (решётки, номера, диски, суппорты, эмблемы…) прячем —
   // вблизи их видно, а издалека это лишь десятки лишних вызовов отрисовки на каждую машину
-  const keep = new Set([bodyMat, glassMat, M.black, tailMat, headMat, M.tire]);
+  const keep = new Set([bodyMat, glassMat, M.black, tailMat, headMat, M.tire, glowMat]);
   const detail = [];
   group.children.forEach((m) => { if (m.isMesh && !keep.has(m.material) && !(m.userData.outlineOf && m.userData.outlineOf.material === bodyMat)) detail.push(m); });
   for (const w of wheels) w.wheel.children.forEach((m) => { if (m.isMesh && m.material !== M.tire && !m.userData.outlineOf) detail.push(m); });

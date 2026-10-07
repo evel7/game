@@ -164,7 +164,7 @@ export const MAPS = [
   {
     id: 'baikal', style: 'ice', name: 'Ледяное озеро «Байкал»', tag: 'Ночной лёд',
     desc: 'Трасса прямо по льду замёрзшего озера под северным сиянием. Очень скользко — заносы бесконечные.',
-    grip: 0.58, night: true, weather: null, horizon: 'ice', aurora: true,
+    grip: 0.66, night: true, weather: null, horizon: 'ice', aurora: true,
     sky: { top: 0x030a1c, horizon: 0x1a5a70, bottom: 0x081422 },
     fog: { color: 0x10293a, near: 70, far: 560 },
     sun: { color: 0xc4dcff, intensity: 0.9, dir: [-0.35, 0.55, -0.6] },
