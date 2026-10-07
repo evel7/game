@@ -425,10 +425,9 @@ function updateCamera(dt, instant = false) {
     const dist = cam.mode === 0 ? 5.4 : 8.2, hgt = cam.mode === 0 ? 1.9 : 3.0;
     // камера жёстко привязана к машине на постоянном расстоянии (на скорости не «отстаёт»);
     // сглаживается только поворот камеры и высота — поэтому картинка плавная, но машина всегда рядом
-    // высота камеры жёстко привязана к машине (без запаздывания): на подъёмах и спусках
-    // камера не «ныряет» и не качается — угол взгляда всегда одинаковый
-    cam.y = cy + hgt;
-    des.set(veh.x - Math.sin(cam.h) * dist, cam.y, veh.z - Math.cos(cam.h) * dist);
+    if (instant || cam.y === undefined) cam.y = cy + hgt;
+    cam.y += (cy + hgt - cam.y) * Math.min(1, dt * 6);
+    des.set(veh.x - Math.sin(cam.h) * dist, Math.max(cam.y, cy + 1.0), veh.z - Math.cos(cam.h) * dist);
     if (W.track.isField) des.y = Math.max(des.y, W.track.heightAt(des.x, des.z) + 0.9);
     look.set(veh.x + Math.sin(cam.h) * 2.5, cy + 1.05, veh.z + Math.cos(cam.h) * 2.5);
     cam.pos.copy(des);
