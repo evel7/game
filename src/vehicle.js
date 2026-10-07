@@ -76,6 +76,11 @@ export class Vehicle {
   step(dt, input, opts) {
     const s = this.spec;
     const grip = opts.grip ?? 1;
+    // режим «Обычный»: без дрифта — ручник просто тормозит, машина держит дорогу как на рельсах
+    const nd = !!opts.nodrift, sim = !!opts.sim;
+    // ESP (симуляция): машина начала скользить без ручника — система стабилизации прикрывает газ
+    const espCut = sim && (this.espT || 0) > 0 ? 0.35 : 1;
+    if (nd) { input = { ...input, brake: Math.max(input.brake || 0, (input.handbrake || 0) * 0.85), handbrake: 0 }; this.kickT = 0; }
 
     const ch = Math.cos(this.h), sh = Math.sin(this.h);
     // вперёд = (sh, ch), влево = (ch, -sh)
@@ -86,8 +91,8 @@ export class Vehicle {
 
     // ---------- рулевое управление ----------
     // руль на скорости: угол уменьшается мягче, чем раньше, — машины уверенно поворачивают и на высокой скорости
-    const speedFactor = 1 / (1 + Math.max(0, Math.abs(u) - 6) / ((s.steerFade ?? 22) * (opts.easy ? 1.9 : 1.6) * (0.9 + 0.5 * this.handK)));
-    const steerAuth = 1 + 0.08 * this.handK;
+    const speedFactor = 1 / (1 + Math.max(0, Math.abs(u) - 6) / ((s.steerFade ?? 22) * (opts.easy ? 1.9 : 1.6) * (1.05 + 0.4 * this.handK)));
+    const steerAuth = 1.04 + 0.08 * this.handK;
     let target = input.steer * s.steerMax * speedFactor * steerAuth;
     // помощь в дрифте: автоматическая контррулёжка по углу скольжения
     const beta = spd > 3 ? Math.atan2(v, Math.max(Math.abs(u), 0.5)) : 0;
@@ -97,7 +102,8 @@ export class Vehicle {
     else if (Math.abs(beta) > 0.2 && input.throttle > 0.3 && (this.intent || 0) > 0) this.intent = Math.max(this.intent, 0.6);
     else if (u < 12) this.intent = Math.max(this.intent || 0, 0.3); // на малой скорости всегда можно покрутить «пончики»
     this.intent = Math.max(0, (this.intent || 0) - dt);
-    const calm = opts.easy && this.intent <= 0;
+    if (nd) this.intent = 0;
+    const calm = (opts.easy && this.intent <= 0) || nd;
     if (opts.assist > 0 && u > 3) {
       // у цепких машин вне заноса контрруль слабее — иначе после поворота машину раскачивает
       // и вообще не мешает обычному повороту без заноса (раньше «съедал» часть руля)
@@ -105,7 +111,7 @@ export class Vehicle {
       target += clamp(beta, -0.9, 0.9) * 0.85 * opts.assist * ak * (1 - 0.5 * Math.abs(input.steer));
     }
     target = clamp(target, -s.steerMax * 1.25 * steerAuth, s.steerMax * 1.25 * steerAuth);
-    const steerRate = 7.5; // рад/с — быстрые перекладки руля в «восьмёрках»
+    const steerRate = 9; // рад/с — быстрые перекладки руля в «восьмёрках»
     this.steer += clamp(target - this.steer, -steerRate * dt, steerRate * dt);
     const d = this.steer;
 
@@ -137,7 +143,7 @@ export class Vehicle {
     const gIdx = Math.abs(this.gear) - 1;
     const ratio = gears[gIdx] * s.finalDrive * (this.gear === -1 ? 1.1 : 1);
     let rpmWheel = Math.abs(u) / s.wheelRadius * ratio * 60 / (2 * Math.PI);
-    const throttle = this.shiftTimer > 0 ? 0 : (this.gear === -1 ? input.brake : input.throttle);
+    const throttle = (this.shiftTimer > 0 ? 0 : (this.gear === -1 ? input.brake : input.throttle)) * espCut;
     // при пробуксовке обороты «улетают» вверх
     let rpmTarget = Math.max(s.idle, rpmWheel);
     if (this.spinR > 0.05) rpmTarget = Math.max(rpmTarget, s.idle + (s.redline * 0.9 - s.idle) * (0.6 + 0.4 * throttle) * Math.min(1, this.spinR * 2));
@@ -155,6 +161,7 @@ export class Vehicle {
     if (thrIn < 0.2) this.liftT = (this.liftT || 0) + dt;
     // у цепких машин «пинок» от случайного отпускания газа (частое на клавиатуре) не срабатывает
     if (this.gripK < 0.5 && (this.thrPrev ?? 0) < 0.3 && thrIn > 0.8 && (this.liftT || 0) < 0.35 && (this.liftT || 0) > 0.02 && u > 6 && this.gear > 0) this.kickT = 0.28;
+    if (nd) this.kickT = 0;
     if (thrIn >= 0.2) this.liftT = 0;
     this.thrPrev = thrIn;
     if (this.kickT > 0) this.kickT -= dt;
@@ -177,7 +184,9 @@ export class Vehicle {
 
     const offMul = this.offroad ? 0.62 : 1;
     const muF = s.muFront * grip * offMul;
-    const muR = s.muRear * grip * offMul;
+    // «Обычный» и «Симуляция»: задняя ось держит не хуже передней — мощная затюненная машина
+    // не срывается в занос от руля на скорости (как у дорожных машин), дрифт только ручником (в симуляции)
+    const muR = (nd || sim ? Math.max(s.muRear, s.muFront * (nd ? 1.06 : 1.0)) : s.muRear) * grip * offMul;
     // поперечный перенос веса: внешние колёса нагружены, внутренние разгружены.
     // Из-за «чувствительности шины к нагрузке» суммарное сцепление оси падает —
     // ось с большей долей переноса (жёстче стабилизатор) срывается первой.
@@ -188,7 +197,7 @@ export class Vehicle {
     const lsR = 1 - 0.14 * Math.min(1, (dFz * (1 - rf)) / (Fzr / 2)) ** 2;
     // лёгкий режим: на скорости машина цепче держит поворот (если не дрифтишь специально ручником/заносом)
     let hsGrip = 1;
-    if (calm) hsGrip = 1 + 0.8 * clamp((spd - 15) / 30, 0, 1);
+    if (calm) hsGrip = (nd ? 1.2 : 1) + 0.8 * clamp((spd - 15) / 30, 0, 1);
     // цепкие машины без ручника: задняя ось держит лучше — не срывается сама от газа и руля
     const gk = input.handbrake > 0.1 ? 0 : this.gripK;
     // дрифт-машины тоже должны уметь пройти поворот на скорости: небольшой запас сцепления сзади (ручник/пинок по-прежнему срывают)
@@ -220,7 +229,7 @@ export class Vehicle {
     // трекшн-контроль на прямой: при старте и разгоне без руля колёса не буксуют впустую.
     // В повороте, с ручником, при «пинке» или в заносе — отключается, чтобы можно было дрифтить.
     const straight = (Math.abs(beta) < 0.1 && Math.abs(input.steer) < 0.3 && hb < 0.1 && !(this.kickT > 0)) ||
-      (calm && u > 15) || // в лёгком режиме без намерения дрифтить газ не срывает задок
+      (calm && u > 15) || nd || (sim && hb < 0.1) || // в лёгком режиме без намерения дрифтить газ не срывает задок; в обычном и симуляции — трекшн-контроль всегда
       (gk > 0.5 && hb < 0.1 && Math.abs(beta) < 0.25); // цепкие машины: трекшн-контроль и в повороте
     if (opts.tcs !== false && straight && driveF > 0) {
       FxR = Math.min(FxR, FmaxR * 0.97);
@@ -305,21 +314,35 @@ export class Vehicle {
     }
     // лёгкое демпфирование; цепкие машины вне заноса гасят раскачку сильнее
     this.r *= 1 - Math.min(0.5, (s.yawDamp ?? 0.6) * (drifting ? (opts.real ? 0.4 : 0.8) : 1 + 1.6 * gk) * dt);
+    if (sim) {
+      // ESP: при скольжении без ручника подтормаживает вращение кузова к траектории руля и прикрывает газ
+      const slip = Math.abs(beta) > 0.07 && input.handbrake < 0.1 && u > 8;
+      this.espT = slip ? 0.25 : Math.max(0, (this.espT || 0) - dt);
+      if (slip) {
+        const lim = 9.81 * ((s.muFront + s.muRear) / 2) * grip / Math.max(u, 1); // не больше, чем позволяют шины
+        const rT = clamp(u * Math.tan(this.steer) / this.L, -lim, lim);
+        this.r += (rT - this.r) * Math.min(1, 4 * dt);
+        const k = Math.min(1, 1.6 * dt) * clamp((Math.abs(beta) - 0.07) / 0.2, 0, 1);
+        const along = this.vx * sh + this.vz * ch;
+        this.vx += (sh * along - this.vx) * k; this.vz += (ch * along - this.vz) * k;
+      }
+    }
     // стабилизация на скорости в лёгком режиме: гасим резкие «виляния», если не в заносе
-    if (calm && u > 12) {
+    if (calm && u > (nd ? 5 : 12)) {
       const rTarget = u * Math.tan(this.steer) / this.L * 0.95;
-      const gMax = (1.6 + 1.0 * clamp((u - 15) / 30, 0, 1)) * (0.85 + 0.45 * this.handK); // все держат поворот, цепкие — сильнее // аркадно: на скорости держит до ~2.2g
-      const lim = 9.81 * gMax / Math.max(u, 1);
-      this.r += (clamp(rTarget, -lim, lim) - this.r) * Math.min(1, (6 + 4 * this.handK) * dt); // машина охотнее следует рулю
+      const gMax = (1.6 + 1.0 * clamp((u - 15) / 30, 0, 1)) * (1.05 + 0.35 * this.handK); // все держат поворот, цепкие — сильнее // аркадно: на скорости держит до ~2.2g
+      const lim = 9.81 * gMax * (nd ? 1.25 : 1) / Math.max(u, 1);
+      this.r += (clamp(rTarget, -lim, lim) - this.r) * Math.min(1, (7.5 + 4 * this.handK) * dt); // машина охотнее следует рулю
       // «помощь в повороте»: если руль заложен сильнее, чем можно пройти, машина сама слегка сбрасывает скорость
       const want = Math.abs(rTarget) * u / 9.81;
-      if (want > gMax && throttle < 0.9) { const k2 = Math.min(0.5, (want - gMax) * 0.9) * dt; this.vx -= this.vx * k2; this.vz -= this.vz * k2; }
+      if (want > gMax * (nd ? 1.25 : 1) && throttle < 0.9) { const k2 = Math.min(0.5, (want - gMax) * 0.9) * dt; this.vx -= this.vx * k2; this.vz -= this.vz * k2; }
       // гасим боковое скольжение кузова
       const k = Math.min(1, 3 * dt);
       const fx = sh, fz = ch;
       const along = this.vx * fx + this.vz * fz;
-      this.vx += (fx * along - this.vx) * k * 0.5 * clamp(Math.abs(beta) / 0.3, 0, 1);
-      this.vz += (fz * along - this.vz) * k * 0.5 * clamp(Math.abs(beta) / 0.3, 0, 1);
+      const sk = nd ? 1.2 * clamp(Math.abs(beta) / 0.12, 0, 1) : 0.5 * clamp(Math.abs(beta) / 0.3, 0, 1);
+      this.vx += (fx * along - this.vx) * k * sk;
+      this.vz += (fz * along - this.vz) * k * sk;
     }
     // стабилизация «помощника»: не даём закрутиться волчком
     if (opts.assist > 0 && Math.abs(beta) > 1.05 && u > 2) this.r *= 1 - 2.5 * dt * opts.assist;

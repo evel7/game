@@ -244,7 +244,7 @@ function spawnPlayer(idx, lat) {
   veh.idx = idx; veh.lat = lat; veh.roadY = p.y; veh.slope = 0; veh.roll = 0;
   if (W.track.isField) { W.track.target = veh; veh.odo = 0; }
   if (W.map.night) {
-    const hl = new THREE.SpotLight(0xfff1d6, 40, 100, 0.5, 0.6, 1.4);
+    const hl = new THREE.SpotLight(0xfff1d6, 65, 130, 0.55, 0.55, 1.3);
     hl.position.set(0, 0.8, 2.0); hl.target.position.set(0, 0, 25);
     model.root.add(hl); model.root.add(hl.target);
   }
@@ -428,15 +428,71 @@ function updateCamera(dt, instant = false) {
   camera.lookAt(cam.look);
 }
 
+// осмотр машины в гараже/тюнинге: тянешь мышью или пальцем — крутишь, колесо/щипок — приближение, двойной клик — сброс
+const insp = { yaw: 0.75, pitch: 0.2, r: 6.2, ty: 0.75, tp: 0.2, tr: 6.2, user: false, on: false };
 function menuCamera(dt, garage) {
   const { veh } = W.player;
   cam.orbit += dt * 0.18;
-  const r = garage ? 6.2 : 7.5;
-  const a = veh.h + (garage ? 0.75 : Math.PI * 0.75) + Math.sin(cam.orbit) * (garage ? 0.6 : 0.9);
-  camera.position.set(veh.x + Math.sin(a) * r, veh.roadY + (garage ? 1.6 : 2.2), veh.z + Math.cos(a) * r);
+  let a, r, y;
+  if (garage && insp.user) {
+    const k = 1 - Math.exp(-dt * 12); // плавно догоняем цель
+    insp.yaw += (insp.ty - insp.yaw) * k; insp.pitch += (insp.tp - insp.pitch) * k; insp.r += (insp.tr - insp.r) * k;
+    a = veh.h + insp.yaw; r = insp.r * Math.cos(insp.pitch); y = 0.7 + insp.r * Math.sin(insp.pitch);
+  } else {
+    r = garage ? 6.2 : 7.5;
+    a = veh.h + (garage ? 0.75 : Math.PI * 0.75) + Math.sin(cam.orbit) * (garage ? 0.6 : 0.9);
+    y = garage ? 1.6 : 2.2;
+  }
+  camera.position.set(veh.x + Math.sin(a) * r, veh.roadY + y, veh.z + Math.cos(a) * r);
   camera.fov = 50; camera.updateProjectionMatrix();
-  camera.lookAt(veh.x, veh.roadY + 0.7, veh.z);
+  camera.lookAt(veh.x, veh.roadY + (garage && insp.user ? 0.55 : 0.7), veh.z);
 }
+const inspOK = () => W && state === 'menu' && (menuScreen === 'garage' || menuScreen === 'tune');
+function inspTake() { // переходим с автопролёта на ручной осмотр без рывка
+  if (insp.user) return;
+  const { veh } = W.player;
+  const dx = camera.position.x - veh.x, dz = camera.position.z - veh.z, dy = camera.position.y - veh.roadY - 0.7;
+  const yaw = Math.atan2(dx, dz) - veh.h, r = Math.hypot(dx, dz, dy);
+  insp.yaw = insp.ty = yaw; insp.r = insp.tr = r; insp.pitch = insp.tp = Math.asin(Math.max(-1, Math.min(1, dy / r)));
+  insp.user = true;
+}
+function inspView(yaw, pitch, r) { inspTake(); const d = ((yaw - insp.ty) % (Math.PI * 2) + Math.PI * 3) % (Math.PI * 2) - Math.PI; insp.ty += d; insp.tp = pitch; insp.tr = r; }
+{
+  const pts = new Map(); let pinch = 0;
+  canvas.addEventListener('pointerdown', (e) => { if (!inspOK()) return; pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); canvas.setPointerCapture(e.pointerId); inspTake(); canvas.style.cursor = 'grabbing'; });
+  canvas.addEventListener('pointermove', (e) => {
+    const p = pts.get(e.pointerId); if (!p || !inspOK()) return;
+    if (pts.size === 1) {
+      insp.ty -= (e.clientX - p.x) * 0.009;
+      insp.tp = Math.max(0.02, Math.min(1.35, insp.tp + (e.clientY - p.y) * 0.006));
+    }
+    p.x = e.clientX; p.y = e.clientY;
+    if (pts.size === 2) {
+      const [a, b] = [...pts.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinch) insp.tr = Math.max(3, Math.min(12, insp.tr * pinch / d));
+      pinch = d;
+    }
+  });
+  const up = (e) => { pts.delete(e.pointerId); if (pts.size < 2) pinch = 0; if (!pts.size) canvas.style.cursor = ''; };
+  canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
+  canvas.addEventListener('wheel', (e) => { if (!inspOK()) return; e.preventDefault(); inspTake(); insp.tr = Math.max(3, Math.min(12, insp.tr * Math.exp(e.deltaY * 0.0012))); }, { passive: false });
+  canvas.addEventListener('dblclick', () => { if (inspOK()) insp.user = false; });
+}
+function setInspect(on) {
+  insp.on = on; document.body.classList.toggle('inspect', on);
+  viewShift = on ? { x: 0, y: 0 } : { x: innerWidth > 800 ? 0.16 : 0, y: innerWidth > 800 ? 0 : 0.2 };
+  updateViewOffset(); camera.updateProjectionMatrix();
+  if (on) inspView(0.75, 0.22, 6);
+}
+document.querySelectorAll('[data-insp]').forEach((b) => b.addEventListener('click', () => {
+  audio.click(); const v = b.dataset.insp;
+  if (v === 'on') return setInspect(true);
+  if (v === 'off') return setInspect(false);
+  if (v === 'auto') { insp.user = false; return; }
+  const [yaw, pitch, r] = { front: [0, 0.12, 5.6], side: [Math.PI / 2, 0.1, 6.2], back: [Math.PI, 0.14, 5.6], q34: [0.75, 0.22, 6], top: [0.4, 1.3, 7], wheel: [1.2, 0.03, 3.4], low: [2.4, 0.02, 4.4] }[v];
+  inspView(yaw, pitch, r);
+}));
+addEventListener('keydown', (e) => { if (e.code === 'Escape' && insp.on) { e.stopPropagation(); setInspect(false); } }, true);
 
 // ======================= заезд =======================
 function curMode() { return MAPS[sel.map].field ? FIELD_MODE : MODES[sel.mode]; }
@@ -541,13 +597,18 @@ function physicsStep(inp) {
   const { veh } = W.player;
   veh.px = veh.x; veh.pz = veh.z; veh.ph = veh.h; veh.pY = veh.roadY;
   const track = W.track;
-  const easy = settings.handling === 'easy';
+  const easy = settings.handling === 'easy' || settings.handling === 'grip', normal = settings.handling === 'grip' && !(G && (G.mode.id === 'drift' || G.mode.id === 'field')); // в режиме «Дрифт» обычный режим не мешает дрифтить
   // помощь руля: везде / только в режиме «Дрифт» (и на полигоне) / выключена
   const am = settings.assistMode;
   const asOn = am === 'all' || (am === 'drift' && (G.mode.id === 'drift' || G.mode.id === 'field'));
-  const res = veh.step(STEP, inp, easy
-    ? { grip: W.map.grip * 1.12, assist: asOn ? 1.15 : 0, manual: settings.manual, easy: true }
-    : { grip: W.map.grip, assist: asOn ? 0.45 : 0, manual: settings.manual, easy: false, real: true });
+  const sim = settings.handling === 'sim';
+  const res = veh.step(STEP, inp, sim
+    ? { grip: W.map.grip * 1.12, assist: 0, manual: settings.manual, easy: false, sim: true }
+    : normal
+    ? { grip: W.map.grip * 1.35, assist: 0, manual: settings.manual, easy: true, nodrift: true }
+    : easy
+    ? { grip: W.map.grip * 1.2, assist: asOn ? 1.15 : 0, manual: settings.manual, easy: true }
+    : { grip: W.map.grip * 1.08, assist: asOn ? 0.45 : 0, manual: settings.manual, easy: false, real: true });
   if (res.shifted) { audio.shift(); if (res.shifted > 0 && inp.throttle > 0.5 && Math.random() < 0.35) audio.backfire(); }
   inp.shiftUp = inp.shiftDown = false;
   if (track.isField) { fieldStep(veh, track); return; }
@@ -1105,6 +1166,7 @@ function showScreen(name) {
   // из гаража уходим только на своей машине (в лобби — можно на «прокатной», если её требует хост)
   if (['main', 'setup', 'online', 'records', 'settings', 'controls', 'profile', 'ach', 'leader'].includes(name)) ensureOwnedCar();
   renderWallet();
+  if (insp.on && name !== 'garage' && name !== 'tune') setInspect(false);
   menuScreen = name; // до отрисовки: renderGarage смотрит на текущий экран (иначе пропадала кнопка «Тюнинг»)
   for (const s of SCREENS) $('menu-' + s).classList.toggle('show', s === name);
   $('loading').classList.remove('show');
@@ -1923,7 +1985,7 @@ function frame(now) {
     W.sun.target.position.set(W.player.veh.x, W.player.veh.roadY, W.player.veh.z);
     W.farPlane.position.set(W.player.veh.x, W.player.veh.roadY - 14, W.player.veh.z);
     if (W.snow) W.snow.update(dt, camera);
-    menuCamera(dt, menuScreen === 'garage');
+    menuCamera(dt, menuScreen === 'garage' || menuScreen === 'tune');
     W.sky.position.copy(camera.position);
   } else if (state === 'countdown' || state === 'race' || state === 'over') {
     G._events = evs;

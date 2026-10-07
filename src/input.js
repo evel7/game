@@ -75,7 +75,7 @@ export class Input {
       this.steer = analog;
     } else {
       // клавиатура: плавный руль, быстрее возвращается к центру; на скорости — чуть медленнее
-      const rate = target === 0 ? 7 : (Math.sign(target) !== Math.sign(this.steer) && this.steer !== 0 ? 11 : 6 - Math.min(1.8, speed / 40));
+      const rate = target === 0 ? 9 : (Math.sign(target) !== Math.sign(this.steer) && this.steer !== 0 ? 13 : 8.5 - Math.min(1.5, speed / 50)); // руль отзывчивее
       const d = target - this.steer;
       this.steer += Math.sign(d) * Math.min(Math.abs(d), rate * dt);
     }
