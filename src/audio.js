@@ -8,7 +8,7 @@ export class GameAudio {
   }
 
   init() {
-    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    if (this.ctx) { this.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     const ctx = this.ctx = new AC();
@@ -106,9 +106,19 @@ export class GameAudio {
   setMusicVol(v) { this.musicVol = v; if (this.musicBus && this.musicOn) this.musicBus.gain.value = v; }
   setMusic(on) { this.musicOn = on; if (this.musicBus) this.musicBus.gain.setTargetAtTime(on ? this.musicVol : 0, this.ctx.currentTime, 0.2); }
 
+  // после сворачивания вкладки / перезахода браузер приостанавливает звук — возобновляем
+  resume() { if (this.ctx && this.ctx.state !== 'running' && this.ctx.state !== 'closed') this.ctx.resume().catch(() => {}); }
+  // тишина мотора и шин (меню, итоги, пауза)
+  silence() {
+    if (!this.ctx || this._silent) return; this._silent = true;
+    const t = this.ctx.currentTime;
+    for (const g of [this.engGain, this.tireGain, this.windGain, this.gravelGain]) { g.gain.cancelScheduledValues(t); g.gain.setTargetAtTime(0, t, 0.06); }
+  }
   // вызывается каждый кадр во время заезда
   update(veh, spec, throttle, slip, offroad, speed, active) {
     if (!this.ctx) return;
+    if (!active) { this.silence(); return; }
+    this._silent = false;
     const t = this.ctx.currentTime;
     if (!active) {
       this.engGain.gain.setTargetAtTime(0, t, 0.08);
