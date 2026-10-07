@@ -61,7 +61,7 @@ if (!settings.handling) settings.handling = settings.easy === false ? 'real' : '
 settings.easy = settings.handling === 'easy';
 // len — длина трассы в км (0 = бесконечная); fieldMode — полигон: obst (с препятствиями), clean (чистое поле), flat (чистое и ровное)
 const sel = Object.assign({ car: 0, colors: {}, mode: 0, map: 0, len: 10, fieldMode: 'obst' }, store.get('sel', {}));
-sel.mm = Object.assign({ mode: 'race', len: 10, size: 5, carRule: 'any' }, sel.mm || {}); // фильтры быстрого матча
+sel.mm = Object.assign({ mode: 'race', len: 10, size: 5, carRule: 'any', bots: 1 }, sel.mm || {}); // фильтры быстрого матча
 if (sel.car >= CARS.length) sel.car = 0;
 // прогресс: ездить можно только на купленных машинах (в гараже можно смотреть любые)
 const ownedIdx = () => CARS.findIndex((c) => c.id === 'kaze');
@@ -527,7 +527,8 @@ function startRace(opts = {}) {
   newGame(lenKm);
   G.online = !!opts.online;
   makeBackWall();
-  spawnRivals(G.online ? 0 : G.mode.rivals);
+  // онлайн «с ботами»: свободные места занимают боты-призраки (у каждого игрока свои, на рейтинг не влияют)
+  spawnRivals(G.online ? Math.min(opts.bots || 0, G.mode.rivals) : G.mode.rivals);
   if (opts.onStart) opts.onStart();
   cam.mode = +settings.camera;
   state = 'countdown';
@@ -1544,6 +1545,7 @@ function renderOnline() {
   };
   seg('mm-mode', [['race', 'Гонка'], ['drift', 'Дрифт'], ['time', 'На время'], ['speed', 'Спидкамеры'], ['clean', 'Без ошибок'], ['escape', 'Побег']], 'mode');
   seg('mm-size', [[5, '5'], [10, '10']], 'size');
+  seg('mm-bots', [[1, '🤖 С ботами'], [0, 'Только игроки']], 'bots');
   seg('mm-car-rule', [['any', 'Любые'], ['class', `Класс ${cls}`], ['same', 'Та же машина']], 'carRule');
   if (!MM_LENS.includes(sel.mm.len)) sel.mm.len = 10;
   $('mm-len').innerHTML = MM_LENS.map((l) => `<option value="${l}" ${l === sel.mm.len ? 'selected' : ''}>${l ? l + ' км' : '∞ бесконечная'}</option>`).join('');
@@ -1771,7 +1773,7 @@ net.on.start = (m) => {
   const mi = MODES.findIndex((x) => x.id === c.mode); sel.mode = mi < 0 ? 0 : mi;
   const field = !!MAPS[sel.map].field;
   for (const p of net.players.values()) { p.model = null; p.vis = null; p.buf = []; }
-  startRace({ seed: m.seed, len: field ? 0 : c.len, fieldMode: c.fieldMode, online: true });
+  startRace({ seed: m.seed, len: field ? 0 : c.len, fieldMode: c.fieldMode, online: true, bots: c.bots || 0 });
 };
 
 

@@ -88,6 +88,7 @@ function cleanMM(m = {}) {
     size: MM_SIZES.includes(+m.size) ? +m.size : 5,
     carRule: CAR_RULES.includes(m.carRule) ? m.carRule : 'any',
     maps: pool.length ? pool : [0],
+    bots: !!+(m.bots ?? 0), // «с ботами»: не ждём полного лобби — через BOT_WAIT стартуем, свободные места занимают боты
   };
 }
 // подходит ли машина игрока b под требование игрока a
@@ -95,16 +96,22 @@ const carOk = (a, b) => a.mmReq.carRule === 'any' || (a.mmReq.carRule === 'class
 function mmFits(room, client) {
   const m = room.mm, q = client.mmReq;
   if (!m || room.state !== 'lobby' || room.players.size >= m.size) return false;
-  if (m.mode !== q.mode || m.len !== q.len || m.size !== q.size) return false;
+  if (m.mode !== q.mode || m.len !== q.len || m.size !== q.size || !!m.bots !== !!q.bots) return false;
   for (const p of room.players.values()) if (!carOk(p, client) || !carOk(client, p)) return false;
   return true;
 }
 function mmStatus(room) {
   broadcast(room, { t: 'mm', count: room.players.size, size: room.mm.size, state: room.cdTimer ? 'countdown' : room.state === 'lobby' ? 'search' : room.state, left: room.cdLeft });
 }
+const BOT_WAIT = 12000;
 function mmCheck(room) {
   if (!room.mm || room.state !== 'lobby') return;
-  if (room.players.size >= room.mm.size && !room.cdTimer) {
+  // с ботами: если за BOT_WAIT лобби не заполнилось — стартуем с теми, кто есть
+  if (room.mm.bots && room.players.size > 0 && !room.cdTimer && !room.botTimer) {
+    room.botTimer = setTimeout(() => { room.botTimer = null; if (rooms.has(room.code) && room.state === 'lobby' && room.players.size > 0) { room.botGo = true; mmCheck(room); } }, BOT_WAIT);
+  }
+  if ((room.players.size >= room.mm.size || (room.botGo && room.players.size > 0)) && !room.cdTimer) {
+    if (room.botTimer) { clearTimeout(room.botTimer); room.botTimer = null; }
     room.cdLeft = MM_COUNTDOWN;
     room.cdTimer = setInterval(() => {
       room.cdLeft--;
@@ -112,12 +119,13 @@ function mmCheck(room) {
         clearInterval(room.cdTimer); room.cdTimer = null;
         const pool = room.mm.maps;
         room.config = cleanConfig({ map: pool[Math.floor(Math.random() * pool.length)], mode: room.mm.mode, len: room.mm.len });
+        room.config.bots = room.mm.bots ? Math.max(0, room.mm.size - room.players.size) : 0;
         startRoomRace(room);
         return;
       }
       mmStatus(room);
     }, 1000);
-  } else if (room.players.size < room.mm.size && room.cdTimer) {
+  } else if (room.players.size < room.mm.size && room.cdTimer && !room.botGo) {
     // кто-то вышел во время отсчёта — ждём дальше
     clearInterval(room.cdTimer); room.cdTimer = null; room.cdLeft = 0;
   }
@@ -186,7 +194,7 @@ function leave(client) {
   }
   room.players.delete(client.id);
   client.room = null;
-  if (!room.players.size) { if (room.cdTimer) clearInterval(room.cdTimer); rooms.delete(room.code); return; }
+  if (!room.players.size) { if (room.cdTimer) clearInterval(room.cdTimer); if (room.botTimer) clearTimeout(room.botTimer); rooms.delete(room.code); return; }
   if (room.host === client.id) room.host = room.players.keys().next().value;
   broadcast(room, { t: 'left', id: client.id, host: room.host });
   checkRaceEnd(room);
@@ -206,7 +214,7 @@ function join(client, msg) {
     client.mmReq = cleanMM(msg.mm || {});
     let best = null;
     for (const r of rooms.values()) if (mmFits(r, client) && (!best || r.players.size > best.players.size)) best = r;
-    room = best || createRoom(true, { mode: client.mmReq.mode, len: client.mmReq.len, size: client.mmReq.size, maps: client.mmReq.maps });
+    room = best || createRoom(true, { mode: client.mmReq.mode, len: client.mmReq.len, size: client.mmReq.size, maps: client.mmReq.maps, bots: client.mmReq.bots });
   } else room = createRoom(false);
   const cap = room.mm ? room.mm.size : MAX_PLAYERS;
   if (room.players.size >= cap) return send(client.ws, { t: 'error', text: `Комната заполнена (максимум ${cap} игроков).` });
