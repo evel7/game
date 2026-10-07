@@ -877,7 +877,7 @@ export function buildCarModel(spec, color, opts = {}) {
 // Посадка машины на дорогу: высоту берём под каждым из 4 колёс и строим по ним плоскость
 // (тангаж и крен), чтобы на перегибах, в ямах и на склонах колёса не утопали в асфальте и не висели.
 // hAt(x, z) — высота поверхности под точкой.
-export function seatCar(model, x, z, h, hAt, dt = 0) {
+export function seatCar(model, x, z, h, hAt) {
   const s = Math.sin(h), c = Math.cos(h);
   let n = 0, sz = 0, sx = 0, sg = 0, fz = 0, fg = 0, nf = 0, rz = 0, rg = 0, nr = 0, lg = 0, nl = 0, rgx = 0, nrx = 0, tw = 0;
   const pts = [];
@@ -893,16 +893,8 @@ export function seatCar(model, x, z, h, hAt, dt = 0) {
   const roll = tw > 0.1 && nl && nrx ? (lg / nl - rgx / nrx) / (2 * tw) : 0;
   let y0 = sg / n - slope * (sz / n) - roll * (sx / n), lift = 0;
   for (const [px, pz, g] of pts) lift = Math.max(lift, g - (y0 + slope * pz + roll * px));
-  // лёгкое сглаживание наклона (как подвеска): асфальт — ломаная с точками через 2 м, и без него кузов мелко дрожит
-  const st = model._seat;
-  let pitch = Math.atan(slope), bank = Math.atan(roll);
-  if (st && dt > 0) {
-    const k = 1 - Math.exp(-dt * 14);
-    pitch = st.p + (pitch - st.p) * k; bank = st.r + (bank - st.r) * k; lift = st.l + (lift - st.l) * k;
-  }
-  model._seat = { p: pitch, r: bank, l: lift };
   model.root.position.set(x, y0 + lift + 0.01, z);
-  model.root.rotation.set(-pitch, h, bank, 'YXZ');
+  model.root.rotation.set(-Math.atan(slope), h, Math.atan(roll), 'YXZ');
 }
 
 export function setCarLod(model, far) {
