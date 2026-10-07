@@ -302,7 +302,7 @@ function groundFn(model, hint) {
 function placePlayerModel(dt) {
   const { veh, model } = W.player;
   const ip = interp();
-  seatCar(model, ip.x, ip.z, ip.h, groundFn(model, veh.idx));
+  seatCar(model, ip.x, ip.z, ip.h, groundFn(model, veh.idx), dt);
   animateCar(model, veh, dt || 0.016, G && G.braking);
 }
 
@@ -374,7 +374,7 @@ function updateRemote(dt) {
     p.vis = v;
     const m = p.model;
     m.root.visible = true;
-    seatCar(m, v.x, v.z, v.h, groundFn(m));
+    seatCar(m, v.x, v.z, v.h, groundFn(m), dt);
     p.wheelSpin += v.spd / m.spec.wheelRadius * dt;
     for (const w of m.wheels) { w.wheel.rotation.x = p.wheelSpin; if (w.front) w.pivot.rotation.y = v.steer; }
     setGhostOpacity(p, Math.hypot(v.x - veh.x, v.z - veh.z));
@@ -429,13 +429,17 @@ function updateCamera(dt, instant = false) {
     cam.y += (cy + hgt - cam.y) * Math.min(1, dt * 6);
     des.set(veh.x - Math.sin(cam.h) * dist, Math.max(cam.y, cy + 1.0), veh.z - Math.cos(cam.h) * dist);
     if (W.track.isField) des.y = Math.max(des.y, W.track.heightAt(des.x, des.z) + 0.9);
-    look.set(veh.x + Math.sin(cam.h) * 2.5, cy + 1.05, veh.z + Math.cos(cam.h) * 2.5);
+    // точка взгляда по высоте тоже сглажена — на перегибах дороги камера не клюёт
+    if (instant || cam.ly === undefined) cam.ly = cy + 1.05;
+    cam.ly += (cy + 1.05 - cam.ly) * Math.min(1, dt * 10);
+    look.set(veh.x + Math.sin(cam.h) * 2.5, cam.ly, veh.z + Math.cos(cam.h) * 2.5);
     cam.pos.copy(des);
     cam.look.copy(look);
   } else if (cam.mode === 2) {
     const b = veh.spec.body;
     des.set(veh.x + fwdX * (b.cabin[0][0] + 0.25), cy + b.cabin[0][1] + 0.55, veh.z + fwdZ * (b.cabin[0][0] + 0.25));
-    look.set(veh.x + fwdX * 30, cy + 1.3 + (veh.slope || 0) * 30, veh.z + fwdZ * 30);
+    cam.sl = instant || cam.sl === undefined ? (veh.slope || 0) : cam.sl + ((veh.slope || 0) - cam.sl) * Math.min(1, dt * 8);
+    look.set(veh.x + fwdX * 30, cy + 1.3 + cam.sl * 30, veh.z + fwdZ * 30);
     cam.pos.copy(des); cam.look.copy(look);
     fov += 6;
   } else {
@@ -732,7 +736,7 @@ function buildGhostCar(g, opacity) {
   return model;
 }
 function placePoseModel(model, pose, dt) {
-  if (W.track) seatCar(model, pose.x, pose.z, pose.h, groundFn(model, pose.idx));
+  if (W.track) seatCar(model, pose.x, pose.z, pose.h, groundFn(model, pose.idx), dt);
   else { model.root.position.set(pose.x, pose.roadY + 0.03, pose.z); model.root.rotation.set(-Math.atan(pose.slope || 0), pose.h, Math.atan(pose.roll || 0), 'YXZ'); }
   pose.wheelSpin = (pose.wheelSpin || 0) + (pose.speed || 0) * dt / 0.33;
   animateCar(model, pose, dt || 0.016, false);
