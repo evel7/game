@@ -16,10 +16,12 @@
   <div id="menu-main" class="screen panel-left">
     <div class="logo">ENDLESS<span>DRIFT</span></div>
     <div class="subtitle">бесконечная 3D-гонка</div>
+    <div class="wallet"></div>
     <button class="btn big" data-go="setup">▶ Играть</button>
     <button class="btn" data-go="online">🌐 Онлайн</button>
-    <button class="btn" data-go="garage">🚗 Гараж</button>
-    <button class="btn" data-go="records">🏆 Рекорды</button>
+    <button class="btn" data-go="garage">🚗 Гараж и тюнинг</button>
+    <div class="row two"><button class="btn" data-go="profile">👤 Профиль</button><button class="btn" data-go="ach">🏅 Достижения</button></div>
+    <div class="row two"><button class="btn" data-go="leader">📊 Лидерборд</button><button class="btn" data-go="records">🏆 Рекорды</button></div>
     <button class="btn" data-go="settings">⚙ Настройки</button>
     <button class="btn" data-go="controls">🎮 Управление</button>
     <button class="btn btn-fs touch-only" type="button">⛶ Полный экран</button>
@@ -46,6 +48,7 @@
   <!-- ===== Гараж ===== -->
   <div id="menu-garage" class="screen panel-left">
     <h2>Гараж <small class="garage-count" id="garage-count"></small></h2>
+    <div class="wallet"></div>
     <div class="car-grid" id="car-grid"></div>
     <div class="swatches" id="car-colors"></div>
     <div class="row">
@@ -63,7 +66,47 @@
     <div class="car-desc" id="car-desc"></div>
     <div class="stats" id="car-stats"></div>
     <div class="car-spec" id="car-spec"></div>
+    <div class="car-buy" id="car-buy"></div>
   </div>
+  <!-- ===== Тюнинг ===== -->
+  <div id="menu-tune" class="screen panel-left wide-left">
+    <h2>Тюнинг <small id="tune-car"></small></h2>
+    <div class="wallet"></div>
+    <div class="seg tabs" id="tune-tabs"><button class="btn small" data-tab="perf">⚙ Техника</button><button class="btn small" data-tab="look">🎨 Внешний вид</button></div>
+    <div class="tune-list" id="tune-list"></div>
+    <div class="row">
+      <button class="btn" data-go="garage">← Гараж</button>
+      <button class="btn accent" data-go="setup">Поехали ✓</button>
+    </div>
+  </div>
+  <!-- ===== Профиль ===== -->
+  <div id="menu-profile" class="screen panel-left wide-left">
+    <h2>Профиль</h2>
+    <div class="scroll" id="profile-body"></div>
+    <div class="row"><button class="btn" data-go="main">← Меню</button></div>
+  </div>
+  <!-- ===== Достижения ===== -->
+  <div id="menu-ach" class="screen panel-left wide-left">
+    <h2>Достижения <small id="ach-count"></small></h2>
+    <div class="scroll" id="ach-list"></div>
+    <div class="row"><button class="btn" data-go="main">← Меню</button></div>
+  </div>
+  <!-- ===== Лидерборд и таблица игроков ===== -->
+  <div id="menu-leader" class="screen panel-wide">
+    <h2>Лидерборд</h2>
+    <div class="seg wrap" id="lb-tabs"></div>
+    <div class="rec-filters" id="lb-filters"></div>
+    <input type="text" id="lb-search" maxlength="16" placeholder="🔍 Найти игрока по нику" />
+    <div class="scroll" id="lb-table"></div>
+    <div class="row"><button class="btn" data-go="main">← Меню</button></div>
+  </div>
+  <div id="player-view" class="modal hidden"><div class="modal-box"><button class="btn small pv-x" id="pv-close">✕</button><div class="scroll" id="pv-body"></div></div></div>
+  <div id="daily" class="modal hidden"><div class="modal-box center">
+    <h2>🎁 Ежедневная награда</h2>
+    <p class="hint">Заходи каждый день — награда растёт. На 7-й день — джекпот!</p>
+    <div class="daily-days" id="daily-days"></div>
+    <button class="btn big accent" id="daily-claim">Забрать</button>
+  </div></div>
 
   <!-- ===== Рекорды ===== -->
   <div id="menu-records" class="screen panel-left">
@@ -250,6 +293,6 @@
   <div id="countdown"></div>
   <div id="fps" class="hidden"></div>
 
-  <script src="dist/game.js?v=1791285642655"></script>
+  <script src="dist/game.js?v=1791371627922"></script>
 </body>
 </html>

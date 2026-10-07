@@ -118,23 +118,26 @@ export class Field {
   update() {
     const t = this.target;
     const cx = Math.floor(t.x / CS), cz = Math.floor(t.z / CS);
+    if (this.water) this.water.position.z = t.z;
+    // игрок в том же чанке и всё вокруг уже построено — нечего делать (без строковых ключей и обхода сетки каждый кадр)
+    if (cx === this._cx && cz === this._cz && !this._pending) return;
+    this._cx = cx; this._cz = cz; this._pending = false;
     let built = 0;
     for (let r = 0; r <= RAD; r++) for (let i = cx - r; i <= cx + r; i++) for (let j = cz - r; j <= cz + r; j++) {
       if (Math.max(Math.abs(i - cx), Math.abs(j - cz)) !== r) continue;
       const key = i + ',' + j;
       if (this.chunks.has(key)) continue;
-      if (built >= 2 && r > 1) continue; // не больше двух чанков за кадр — без рывков
+      if (built >= 2 && r > 1) { this._pending = true; continue; } // не больше двух чанков за кадр — без рывков
       this.buildChunk(i, j); built++;
     }
     for (const [key, grp] of this.chunks) {
-      const [i, j] = key.split(',').map(Number);
+      const i = grp.userData.ci, j = grp.userData.cj;
       if (Math.abs(i - cx) > RAD + 1 || Math.abs(j - cz) > RAD + 1) {
         this.root.remove(grp);
         grp.traverse((o) => { if (o.geometry && !o.userData.sharedGeo) o.geometry.dispose(); if (o.isInstancedMesh) o.dispose(); });
         this.chunks.delete(key);
       }
     }
-    if (this.water) this.water.position.z = t.z;
   }
 
   buildChunk(ci, cj) {
@@ -165,7 +168,7 @@ export class Field {
     const mesh = new THREE.Mesh(g, this.groundMat);
     mesh.receiveShadow = this.quality > 0;
     grp.add(mesh);
-    grp.userData.col = [];
+    grp.userData.col = []; grp.userData.ci = ci; grp.userData.cj = cj;
     if (this.props) this.buildProps(grp, ci, cj);
     this.root.add(grp);
     this.chunks.set(ci + ',' + cj, grp);
@@ -225,16 +228,7 @@ function buildFieldProps(surface) {
   // бетонный блок
   { const b = new THREE.BoxGeometry(3, 0.8, 0.7); b.translate(0, 0.4, 0); out.block = M([tint(b, 0xc9c6bd)]); }
   // пальма
-  {
-    const g = [];
-    let x = 0;
-    for (let k = 0; k < 6; k++) { const t = new THREE.CylinderGeometry(0.2 - k * 0.015, 0.24 - k * 0.015, 1.1, 6); t.translate(x, 0.55 + k * 1.05, 0); x += 0.12; g.push(tint(t, k % 2 ? 0x8a6a43 : 0x9c7a50)); }
-    for (let k = 0; k < 7; k++) {
-      const leaf = new THREE.BoxGeometry(0.5, 0.06, 3.0); leaf.translate(0, 0, 1.4); leaf.rotateX(0.35); leaf.rotateY((k / 7) * Math.PI * 2);
-      leaf.translate(x, 6.5, 0); g.push(tint(leaf, k % 2 ? 0x2f8a3a : 0x3fa048));
-    }
-    out.palm = M(g);
-  }
+  out.palm = palmGeo();
   // зонтик
   {
     const p = new THREE.CylinderGeometry(0.04, 0.04, 2.3, 5); p.translate(0, 1.15, 0);
@@ -266,4 +260,16 @@ function buildFieldProps(surface) {
     out.snowman = M([tint(a, 0xffffff), tint(b, 0xffffff), tint(n, 0xff7a1a)]);
   }
   return out;
+}
+
+// пальма (используется и на «Полигоне», и на трассе «Ривьера»)
+export function palmGeo(lean = 0.12, trunkCol = [0x9c7a50, 0x8a6a43], leafCol = [0x3fa048, 0x2f8a3a]) {
+  const g = [];
+  let x = 0;
+  for (let k = 0; k < 6; k++) { const t = new THREE.CylinderGeometry(0.2 - k * 0.015, 0.24 - k * 0.015, 1.1, 6); t.translate(x, 0.55 + k * 1.05, 0); x += lean; g.push(tint(t, trunkCol[k % 2])); }
+  for (let k = 0; k < 7; k++) {
+    const leaf = new THREE.BoxGeometry(0.5, 0.06, 3.0); leaf.translate(0, 0, 1.4); leaf.rotateX(0.35); leaf.rotateY((k / 7) * Math.PI * 2);
+    leaf.translate(x, 6.5, 0); g.push(tint(leaf, leafCol[k % 2]));
+  }
+  return mergeGeometries(g);
 }

@@ -44,6 +44,8 @@ function mergeChunk(grp) {
 export class Track {
   constructor(scene, map, seed = 1, quality = 1, opts = {}) {
     this.scene = scene; this.map = map; this.seed = seed; this.quality = quality;
+    // стиль оформления: новые карты переиспользуют рельеф/декорации существующих (например, 'city')
+    this.style = map.style ?? map.id;
     this.draw = opts.draw ?? 1;
     this.ahead = [8, AHEAD_CHUNKS, 16][this.draw] ?? AHEAD_CHUNKS;
     // finishIdx — индекс точки финиша (трасса заданной длины); Infinity — бесконечная трасса
@@ -57,6 +59,14 @@ export class Track {
     this.chunks = new Map();
     this.root = new THREE.Group();
     scene.add(this.root);
+    // общие для всех чанков геометрии (раньше создавались заново в каждом чанке)
+    this.geo = {
+      post: new THREE.BoxGeometry(0.12, 0.85, 0.12),
+      box: new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0),
+      plane: new THREE.PlaneGeometry(1, 1),
+      lampHead: new THREE.BoxGeometry(0.5, 0.15, 0.9),
+      pool: new THREE.PlaneGeometry(11, 11).rotateX(-Math.PI / 2),
+    };
     this.makeMaterials();
     this.propGeo = buildPropGeometries(map);
     this.ensure(CH * (this.ahead + 2));
@@ -77,7 +87,7 @@ export class Track {
     const dir0 = r() < 0.5 ? 1 : -1;
     const roll = r();
     // рельеф: иногда к повороту/прямой добавляется подъём, спуск или горб (подъём-спуск)
-    if (g.s > 300 && !(g.ev && g.s < g.ev.s0 + g.ev.L) && r() < 0.38) this.planElevation();
+    if (t.events !== false && g.s > 300 && !(g.ev && g.s < g.ev.s0 + g.ev.L) && r() < 0.38) this.planElevation();
     if (r() < 0.12) {
       // резкий поворот: малый радиус, большой угол
       const c = curve(t.minR * (0.72 + r() * 0.25), 1.0 + r() * 0.6, dir0, g.h);
@@ -158,6 +168,8 @@ export class Track {
     }
     // первые метры — ровная площадка старта
     if (g.s < 120) p.y *= g.s / 120;
+    // подъём всей трассы (например, над уровнем моря на «Ривьере»)
+    if (this.map.track.base) p.y += this.map.track.base;
     this.pts.push(p);
     g.x += Math.sin(g.h) * SP; g.z += Math.cos(g.h) * SP;
     g.s += SP; seg.u += SP;
@@ -216,14 +228,28 @@ export class Track {
     const wx = p.x + p.lx * off, wz = p.z + p.lz * off;
     const hills = this.map.ground.hills;
     let y = p.y;
-    const edge = this.hw + this.sh;
-    if (this.map.id === 'city') {
+    const edge = this.hw + this.sh, st = this.style;
+    if (st === 'city') {
       if (a > edge + 0.4) y += 0.18; // тротуар
       return y;
     }
+    if (st === 'ice') {
+      // ровный лёд озера: лишь едва заметные снежные гребни
+      if (a > edge) y -= Math.min(0.12, (a - edge) * 0.05);
+      return y + smooth(clamp((a - edge - 4) / 40, 0, 1)) * hills * (fbm2(wx * 0.02, wz * 0.02, this.seed + 11, 2) - 0.5);
+    }
     if (a > edge) y -= Math.min(0.6, (a - edge) * 0.25);           // кювет
     const f = smooth(clamp((a - edge - 6) / 70, 0, 1));
-    y += f * hills * (fbm2(wx * 0.008, wz * 0.008, this.seed + 11, 4) * 1.6 - 0.35);
+    if (st === 'coast' && off < 0) {
+      // со стороны моря: пляж и уход под воду (уровень моря — абсолютная высота)
+      const sea = this.map.sea?.level ?? 0;
+      const t = smooth(clamp((a - edge - 8) / 46, 0, 1));
+      return y + (sea - 3.2 - y) * t;
+    }
+    const n = fbm2(wx * 0.008, wz * 0.008, this.seed + 11, 4);
+    y += f * hills * (st === 'coast' ? n * 1.4 - 0.15 : n * 1.6 - 0.35);
+    const rough = this.map.ground.rough;
+    if (rough) y += f * rough * (fbm2(wx * 0.045, wz * 0.045, this.seed + 23, 2) - 0.5) * 2;
     return y;
   }
 
@@ -241,11 +267,40 @@ export class Track {
       // следы шин посередине полос
       c.fillStyle = 'rgba(0,0,0,0.12)';
       c.fillRect(w * 0.18, 0, w * 0.1, h); c.fillRect(w * 0.72, 0, w * 0.1, h);
+      if (rd.cracks) {
+        // лёд: светлые разводы и сетка трещин (бесшовно по вертикали)
+        for (let i = 0; i < 26; i++) {
+          const x = rnd() * w, y = rnd() * h, r = 20 + rnd() * 60;
+          const gr = c.createRadialGradient(x, y, 0, x, y, r);
+          const a = rnd() < 0.5 ? 'rgba(255,255,255,0.16)' : 'rgba(20,60,110,0.16)';
+          gr.addColorStop(0, a); gr.addColorStop(1, 'rgba(0,0,0,0)');
+          c.fillStyle = gr; c.fillRect(x - r, y - r, r * 2, r * 2);
+        }
+        c.lineCap = 'round';
+        for (let i = 0; i < 16; i++) {
+          // ломаная трещина с ответвлениями: список отрезков, рисуем дважды со сдвигом на высоту текстуры — шов не виден
+          let x = 14 + rnd() * (w - 28), y = rnd() * h, a = rnd() * Math.PI * 2;
+          const segs = [];
+          for (let k = 0; k < 7; k++) {
+            a += (rnd() - 0.5) * 1.3;
+            const nx = clamp(x + Math.cos(a) * 14, 14, w - 14), ny = y + Math.sin(a) * 14;
+            segs.push(x, y, nx, ny);
+            if (rnd() < 0.3) segs.push(nx, ny, clamp(nx + (rnd() - 0.5) * 22, 14, w - 14), ny + (rnd() - 0.5) * 22);
+            x = nx; y = ny;
+          }
+          c.strokeStyle = `rgba(240,250,255,${0.18 + rnd() * 0.25})`; c.lineWidth = 0.6 + rnd() * 1.0;
+          for (const dy of [-h, 0, h]) {
+            c.beginPath();
+            for (let k = 0; k < segs.length; k += 4) { c.moveTo(segs[k], segs[k + 1] + dy); c.lineTo(segs[k + 2], segs[k + 3] + dy); }
+            c.stroke();
+          }
+        }
+      }
       c.fillStyle = rd.edge; c.fillRect(6, 0, 6, h); c.fillRect(w - 12, 0, 6, h);
-      c.fillStyle = rd.line; c.fillRect(w / 2 - 4, 0, 8, h * 0.5);
+      if (rd.line) { c.fillStyle = rd.line; c.fillRect(w / 2 - 4, 0, 8, h * 0.5); }
     }, { repeat: true, aniso: 8 });
     this.roadMat = new THREE.MeshStandardMaterial({
-      map: roadTex, roughness: m.night ? 0.42 : 0.88, metalness: m.night ? 0.15 : 0,
+      map: roadTex, roughness: rd.rough ?? (m.night ? 0.42 : 0.88), metalness: m.night ? 0.15 : 0,
       envMapIntensity: m.night ? 0.8 : 0.4,
     });
     const kerbTex = canvasTexture(32, 64, (c, w, h) => {
@@ -256,6 +311,17 @@ export class Track {
     this.shoulderMat = new THREE.MeshLambertMaterial({ color: rd.shoulderColor });
     this.terrainMat = new THREE.MeshLambertMaterial({ vertexColors: true });
     this.propMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+    // светящиеся части декораций (лава, окна) — без освещения, цвета вершин > 1 подхватывает bloom на ночных картах
+    // toneMapped: false — иначе ACES выбеливает насыщенный оранжевый в бледно-жёлтый
+    this.glowMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, toneMapped: false });
+    const st = this.style;
+    if (m.sea) {
+      // море: одна плоскость на постоянной высоте, едет вместе с игроком
+      const sea = new THREE.Mesh(new THREE.PlaneGeometry(3200, 3200).rotateX(-Math.PI / 2),
+        new THREE.MeshStandardMaterial({ color: m.sea.color, roughness: 0.18, metalness: 0.25, envMapIntensity: 1.1 }));
+      sea.position.y = m.sea.level ?? 0; sea.receiveShadow = false;
+      this.sea = sea; this.root.add(sea);
+    }
 
     if (m.barrier === 'tires') {
       const tex = canvasTexture(128, 64, (c, w, h) => {
@@ -269,15 +335,19 @@ export class Track {
     } else if (m.barrier === 'rail') {
       this.barrierMat = new THREE.MeshStandardMaterial({ color: 0xb8c0c8, metalness: 0.7, roughness: 0.35, side: THREE.DoubleSide });
       this.postMat = new THREE.MeshLambertMaterial({ color: 0x5a5f66 });
-      this.snowbankMat = new THREE.MeshLambertMaterial({ color: 0xf6f9fc, side: THREE.DoubleSide });
+      const bank = m.bank !== undefined ? m.bank : (st === 'snow' ? 0xf6f9fc : null);
+      if (bank !== null) this.snowbankMat = new THREE.MeshLambertMaterial({ color: bank, side: THREE.DoubleSide });
     } else {
       const tex = canvasTexture(128, 32, (c, w, h) => {
         c.fillStyle = '#8d8d95'; c.fillRect(0, 0, w, h);
         c.fillStyle = 'rgba(0,0,0,0.25)'; c.fillRect(0, 0, 2, h); c.fillRect(64, 0, 2, h);
       }, { repeat: true });
       this.barrierMat = new THREE.MeshLambertMaterial({ map: tex, side: THREE.DoubleSide });
-      this.neonMat = new THREE.MeshBasicMaterial({ color: 0x28e7ff });
-      this.neonMat2 = new THREE.MeshBasicMaterial({ color: 0xff2ea6 });
+      const neon = m.neon !== undefined ? m.neon : [0x28e7ff, 0xff2ea6];
+      if (neon) {
+        this.neonMat = new THREE.MeshBasicMaterial({ color: neon[0] });
+        this.neonMat2 = new THREE.MeshBasicMaterial({ color: neon[1] });
+      }
     }
 
     const gateTex = (text) => canvasTexture(512, 96, (c, w, h) => {
@@ -332,7 +402,39 @@ export class Track {
     this.standGrey = new THREE.MeshLambertMaterial({ color: 0x6b6f78 });
     this.roofMat = new THREE.MeshLambertMaterial({ color: 0xd62828 });
 
-    if (m.id === 'city') {
+    if (st === 'city' && !m.night) {
+      // город днём / на закате: светлые фасады, окна отражают закатное небо
+      this.buildingMats = [0, 1, 2].map((v) => {
+        const tex = canvasTexture(128, 256, (c, w, h) => {
+          const base = ['#e2d3c4', '#cdb6bd', '#b4c2d2'][v];
+          c.fillStyle = base; c.fillRect(0, 0, w, h);
+          const rnd = mulberry32(200 + v);
+          for (let y = 6; y < h - 4; y += 12) {
+            c.fillStyle = 'rgba(0,0,0,0.06)'; c.fillRect(0, y + 9, w, 2);
+            for (let x = 6; x < w - 4; x += 12) {
+              const r = rnd();
+              c.fillStyle = r < 0.18 ? '#ffc58a' : r < 0.3 ? '#ffe0b8' : ['#3b4a6b', '#4a5a7c', '#56607e'][Math.floor(rnd() * 3)];
+              c.fillRect(x, y, 7, 8);
+            }
+          }
+        }, { repeat: true });
+        tex.repeat.set(2, 3);
+        return new THREE.MeshLambertMaterial({ map: tex });
+      });
+      this.lampHeadMat = new THREE.MeshBasicMaterial({ color: 0xfff1d6 });
+      const words = ['RAMEN', 'HOTEL', 'SUSHI', 'КАФЕ', 'MATCHA', 'DRIFT', 'TAXI', 'КИНО'];
+      const cols = [['#c8102e', '#fff'], ['#fff', '#c8102e'], ['#1d2b53', '#ffd9e4'], ['#ffd9e4', '#7a1a3a']];
+      this.neonSigns = words.map((wd, i) => new THREE.MeshLambertMaterial({
+        map: canvasTexture(256, 96, (c, w, h) => {
+          const [bg, fg] = cols[i % cols.length];
+          c.fillStyle = bg; c.fillRect(0, 0, w, h);
+          c.strokeStyle = fg; c.lineWidth = 4; c.strokeRect(6, 6, w - 12, h - 12);
+          c.fillStyle = fg; c.font = 'bold 54px Arial'; c.textAlign = 'center'; c.textBaseline = 'middle';
+          c.fillText(wd, w / 2, h / 2 + 3);
+        }),
+        side: THREE.DoubleSide,
+      }));
+    } else if (st === 'city') {
       this.buildingMats = [0, 1, 2].map((v) => {
         const tex = canvasTexture(128, 256, (c, w, h) => {
           const base = ['#20222c', '#262033', '#1d2a33'][v];
@@ -384,6 +486,7 @@ export class Track {
     }
     // чанки дальше, чем видно сквозь туман, не рисуем (они всё равно полностью «в тумане»), но держим готовыми
     const pp = this.P(Math.max(this.base, Math.min(this.lastIdx, Math.round(playerIdx))));
+    if (this.sea) { this.sea.position.x = pp.x; this.sea.position.z = pp.z; }
     // скрываем дальние чанки только на «близкой» дальности прорисовки
     const vis = this.draw === 0 ? (this.map.fog?.far ?? 700) * 0.8 + 60 : Infinity;
     for (const [c, grp] of this.chunks) {
@@ -445,7 +548,7 @@ export class Track {
     road.receiveShadow = true; grp.add(road);
 
     // обочины: поребрики (красно-белые) на поворотах, обычная обочина на прямых
-    const isKerb = (i) => Math.abs(this.P(i).k) > 1 / 170 || Math.abs(this.P(i + 1).k) > 1 / 170;
+    const isKerb = m.road.kerb === false ? () => false : (i) => Math.abs(this.P(i).k) > 1 / 170 || Math.abs(this.P(i + 1).k) > 1 / 170;
     for (const side of [1, -1]) {
       const offs = side > 0 ? [hw + sh, hw] : [-hw, -hw - sh];
       const kerb = new THREE.Mesh(this.ribbon(i0, i1, offs, (p, o) => p.y + 0.035 + (Math.abs(o) > hw + 0.1 ? 0.03 : 0), null, 1 / 4, (i) => !isKerb(i)), this.kerbMat);
@@ -455,11 +558,21 @@ export class Track {
     }
 
     // рельеф
+    // (цвет возвращается во временном объекте: ribbon() сразу копирует компоненты — без лишних аллокаций на вершину)
     const nearC = new THREE.Color(m.ground.near), farC = new THREE.Color(m.ground.far), tmp = new THREE.Color();
+    const sandC = m.ground.sand !== undefined ? new THREE.Color(m.ground.sand) : null, wetC = sandC && sandC.clone().multiplyScalar(0.72);
+    const ehw = hw + sh;
     const colorFn = (p, off) => {
       const wx = p.x + p.lx * off, wz = p.z + p.lz * off;
       const n = fbm2(wx * 0.05, wz * 0.05, this.seed + 3, 2);
-      return tmp.copy(nearC).lerp(farC, clamp(n * 1.3 - 0.15 + Math.abs(off) / 400, 0, 1)).clone();
+      tmp.copy(nearC).lerp(farC, clamp(n * 1.3 - 0.15 + Math.abs(off) / 400, 0, 1));
+      if (sandC && off < 0) {
+        // берег: трава → песок → мокрый песок у воды
+        const a = -off - ehw;
+        tmp.lerp(sandC, smooth(clamp((a - 3) / 10, 0, 1)));
+        if (a > 34) tmp.lerp(wetC, smooth(clamp((a - 34) / 16, 0, 1)));
+      }
+      return tmp;
     };
     const e = hw + sh;
     const cols = [e, e + 1.5, e + 4, e + 9, e + 18, e + 34, e + 60, e + 100, e + 160, e + 240];
@@ -502,8 +615,8 @@ export class Track {
         const mesh = new THREE.Mesh(g, this.barrierMat); mesh.castShadow = true; grp.add(mesh);
         // столбики
         const n = Math.floor((i1 - i0) / 2);
-        const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.12, 0.85, 0.12), this.postMat, n);
-        posts.userData.sharedGeo = false;
+        const posts = new THREE.InstancedMesh(this.geo.post, this.postMat, n);
+        posts.userData.sharedGeo = true;
         const mtx = new THREE.Matrix4();
         for (let k = 0; k < n; k++) {
           const p = this.P(i0 + k * 2);
@@ -511,17 +624,18 @@ export class Track {
           posts.setMatrixAt(k, mtx);
         }
         grp.add(posts);
-        // снежный вал за отбойником
-        const bank = new THREE.Mesh(this.ribbon(i0, i1, s > 0 ? [w + 3, w + 1.6, w + 0.4] : [-w - 0.4, -w - 1.6, -w - 3],
-          (p, o) => p.y + (Math.abs(Math.abs(o) - w - 1.6) < 0.1 ? 0.9 : 0.05), null), this.snowbankMat);
-        grp.add(bank);
+        // снежный (или травяной) вал за отбойником
+        if (this.snowbankMat) grp.add(new THREE.Mesh(this.ribbon(i0, i1, s > 0 ? [w + 3, w + 1.6, w + 0.4] : [-w - 0.4, -w - 1.6, -w - 3],
+          (p, o) => p.y + (Math.abs(Math.abs(o) - w - 1.6) < 0.1 ? 0.9 : 0.05), null), this.snowbankMat));
       } else {
         // бетонный отбойник «Нью-Джерси» + неоновая полоса
         const prof = [[w, 0], [w + 0.12, 0.3], [w + 0.18, 0.85], [w + 0.32, 0.85], [w + 0.4, 0.3], [w + 0.45, 0]];
         const g = this.sweep(i0, i1, prof.map(([o, hh]) => [s * o, hh]), 1 / 6);
         const mesh = new THREE.Mesh(g, this.barrierMat); mesh.castShadow = true; mesh.receiveShadow = true; grp.add(mesh);
-        const strip = new THREE.Mesh(this.ribbon(i0, i1, s > 0 ? [w + 0.3, w + 0.2] : [-w - 0.2, -w - 0.3], (p) => p.y + 0.87, null), s > 0 ? this.neonMat : this.neonMat2);
-        grp.add(strip);
+        if (this.neonMat) {
+          const strip = new THREE.Mesh(this.ribbon(i0, i1, s > 0 ? [w + 0.3, w + 0.2] : [-w - 0.2, -w - 0.3], (p) => p.y + 0.87, null), s > 0 ? this.neonMat : this.neonMat2);
+          grp.add(strip);
+        }
       }
     }
   }
@@ -578,13 +692,15 @@ export class Track {
   buildProps(grp, c, i0, i1) {
     const m = this.map, rnd = mulberry32(this.seed * 1000 + c * 7919);
     const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
-    const place = (type, count, offMin, offMax, sMin, sMax, margin = 3, cast = true) => {
-      const geo = this.propGeo[type]; if (!geo) return;
+    // side: 0 — обе стороны, ±1 — только с одной стороны трассы
+    const place = (type, count, offMin, offMax, sMin, sMax, margin = 3, cast = true, onlySide = 0) => {
+      const geo = this.propGeo[type], glow = this.propGeo[type + '_glow']; if (!geo && !glow) return;
       const list = [];
       for (let k = 0; k < count * 3 && list.length < count; k++) {
         const i = i0 + Math.floor(rnd() * (i1 - i0));
         const p = this.P(i);
-        const side = rnd() < 0.5 ? -1 : 1;
+        let side = rnd() < 0.5 ? -1 : 1;
+        if (onlySide) side = onlySide;
         const off = side * (offMin + rnd() * (offMax - offMin));
         const x = p.x + p.lx * off, z = p.z + p.lz * off;
         if (!this.clearOfRoad(x, z, i, margin)) continue;
@@ -595,28 +711,44 @@ export class Track {
         list.push(mtx.compose(ps, q, sc).clone());
       }
       if (!list.length) return;
-      const im = new THREE.InstancedMesh(geo, this.propMat, list.length);
-      im.userData.sharedGeo = true;
-      list.forEach((mm, k) => im.setMatrixAt(k, mm));
-      im.castShadow = cast && this.quality > 0; im.receiveShadow = false;
-      grp.add(im);
+      if (geo) {
+        const im = new THREE.InstancedMesh(geo, this.propMat, list.length);
+        im.userData.sharedGeo = true;
+        list.forEach((mm, k) => im.setMatrixAt(k, mm));
+        im.castShadow = cast && this.quality > 0; im.receiveShadow = false;
+        grp.add(im);
+      }
+      if (glow) {
+        const gm = new THREE.InstancedMesh(glow, this.glowMat, list.length);
+        gm.userData.sharedGeo = true;
+        list.forEach((mm, k) => gm.setMatrixAt(k, mm));
+        grp.add(gm);
+      }
     };
-    if (m.id === 'desert') {
+    const st = this.style;
+    if (m.decor) {
+      // новые карты: расстановка из описания карты (отступы — от отбойника)
+      if (st === 'city') this.buildCity(grp, c, i0, i1, rnd);
+      for (const [type, count, dMin, dMax, sMin, sMax, margin = 3, cast = true, chance = 1, side = 0] of m.decor) {
+        if (chance < 1 && rnd() > chance) continue;
+        place(type, count, this.wall + dMin, this.wall + dMax, sMin, sMax, margin, cast, side);
+      }
+    } else if (st === 'desert') {
       place('cactus', 8, this.wall + 3, 70, 0.8, 1.5);
       place('bush', 8, this.wall + 2, 60, 0.7, 1.6, 2, false);
       place('rock', 8, this.wall + 4, 110, 0.6, 3.2);
       if (rnd() < 0.8) place('mesa', 1, 150, 240, 0.7, 1.7, 60, false);
-    } else if (m.id === 'snow') {
+    } else if (st === 'snow') {
       place('pine', 22, this.wall + 3, 110, 0.8, 1.6);
       place('rock', 6, this.wall + 3, 80, 0.6, 2.2);
       if (rnd() < 0.9) place('peak', 1, 170, 250, 0.8, 1.8, 90, false);
-    } else if (m.id === 'city') {
+    } else if (st === 'city') {
       this.buildCity(grp, c, i0, i1, rnd);
     }
   }
 
   buildCity(grp, c, i0, i1, rnd) {
-    const box = new THREE.BoxGeometry(1, 1, 1); box.translate(0, 0.5, 0);
+    const box = this.geo.box, night = this.map.night;
     const per = [[], [], []];
     const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
     const signs = [];
@@ -631,7 +763,7 @@ export class Track {
           q.setFromAxisAngle(up, p.h);
           sc.set(width, height, depth); ps.set(x, p.y, z);
           per[Math.floor(rnd() * 3)].push(mtx.compose(ps, q, sc).clone());
-          if (rnd() < 0.45) signs.push({ p, off: off - side * (depth / 2 + 0.3), y: p.y + 6 + rnd() * Math.min(20, height - 10), side, w: 6 + rnd() * 3 });
+          if (rnd() < (night ? 0.45 : 0.3)) signs.push({ p, off: off - side * (depth / 2 + 0.3), y: p.y + 6 + rnd() * Math.min(20, height - 10), side, w: 6 + rnd() * 3 });
         }
         i += Math.ceil((width + 3) / SP);
       }
@@ -640,11 +772,12 @@ export class Track {
       if (!list.length) return;
       const im = new THREE.InstancedMesh(box, this.buildingMats[v], list.length);
       list.forEach((mm, k) => im.setMatrixAt(k, mm));
-      im.userData.sharedGeo = false;
+      im.userData.sharedGeo = true;
+      if (!night) { im.castShadow = this.quality > 0; im.receiveShadow = true; }
       grp.add(im);
     });
     // неоновые вывески на фасадах, обращённые к дороге
-    const plane = new THREE.PlaneGeometry(1, 1);
+    const plane = this.geo.plane;
     for (const s of signs) {
       const mat = this.neonSigns[Math.floor(rnd() * this.neonSigns.length)];
       const mesh = new THREE.Mesh(plane, mat);
@@ -667,19 +800,21 @@ export class Track {
       const hoff = off - side * 2.0;
       heads.push(new THREE.Matrix4().makeTranslation(p.x + p.lx * hoff, p.y + 6.9, p.z + p.lz * hoff));
       const poff = off - side * 3.5;
-      pools.push({ x: p.x + p.lx * poff, y: p.y + 0.05, z: p.z + p.lz * poff });
+      if (night) pools.push(new THREE.Matrix4().makeTranslation(p.x + p.lx * poff, p.y + 0.05, p.z + p.lz * poff));
     }
     if (lamps.length) {
       const im = new THREE.InstancedMesh(lampGeo, this.propMat, lamps.length);
       im.userData.sharedGeo = true;
       lamps.forEach((mm, k) => im.setMatrixAt(k, mm)); grp.add(im);
-      const hg = new THREE.BoxGeometry(0.5, 0.15, 0.9);
-      const hm = new THREE.InstancedMesh(hg, this.lampHeadMat, heads.length);
+      const hm = new THREE.InstancedMesh(this.geo.lampHead, this.lampHeadMat, heads.length);
+      hm.userData.sharedGeo = true;
       heads.forEach((mm, k) => hm.setMatrixAt(k, mm)); grp.add(hm);
-      const pg = new THREE.PlaneGeometry(11, 11); pg.rotateX(-Math.PI / 2);
-      const pm = new THREE.InstancedMesh(pg, this.poolMat, pools.length);
-      pools.forEach((p, k) => pm.setMatrixAt(k, new THREE.Matrix4().makeTranslation(p.x, p.y, p.z)));
-      pm.renderOrder = 1; grp.add(pm);
+      if (pools.length) {
+        const pm = new THREE.InstancedMesh(this.geo.pool, this.poolMat, pools.length);
+        pm.userData.sharedGeo = true;
+        pools.forEach((mm, k) => pm.setMatrixAt(k, mm));
+        pm.renderOrder = 1; grp.add(pm);
+      }
     }
   }
 

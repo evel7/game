@@ -4,8 +4,16 @@
   "description": "Онлайн-сервер для ENDLESS DRIFT: комнаты и пересылка позиций машин (WebSocket)",
   "main": "index.js",
   "private": true,
-  "scripts": { "start": "node index.js" },
-  "engines": { "node": ">=18" },
-  "dependencies": { "ws": "^8.18.0" },
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "pg": "^8.23.1",
+    "ws": "^8.18.0"
+  },
   "license": "MIT"
 }
