@@ -40,7 +40,14 @@ npm test           # смоук-тест: аккаунты, заезды с ре
    и `[server] аккаунты готовы (хранилище: pg)`.
 
 SSL включается автоматически (для не-localhost хостов и при `sslmode=require`).
-Если база недоступна при старте, сервер делает 5 попыток, затем работает на файлах и пишет об этом в лог.
+Если база недоступна при старте, сервер **не переходит на файлы**, а повторяет подключение (пауза до 30 с),
+пока не получится. В это время `/api/...` отвечает 503 «Сервер запускается», онлайн-заезды работают.
+
+**Проверка:** открой `https://<сервер>/api/health` → `{"ok":true,"store":"pg","players":N,...}`.
+`store: "starting"` + `error` — нет связи с базой (проверь `DATABASE_URL`), `store: "file"` — `DATABASE_URL` не задан.
+
+**Если базу пересоздали / очистили:** аккаунты восстановятся сами — каждое устройство с локальным прогрессом
+при запуске игры пересоздаёт свой аккаунт с тем же кодом восстановления и заливает прогресс.
 
 ## HTTP API (кратко)
 
@@ -48,13 +55,16 @@ SSL включается автоматически (для не-localhost хо�
 Токен — в теле (`token`), в query (`?token=`) или заголовком `Authorization: Bearer <token>`.
 
 - `POST /api/register {name}` → `{id, token, recovery, name, profile}`
-- `POST /api/sync {token, name?, save?, stats?, records?}` → `{ok, improved, profile}`
+- `POST /api/sync {token, name?, save?, stats?, records?, recreate?, force?}` → `{ok, id, recreated, stale, saveAt, cloudXp, improved, profile}`
+  - `recreate: true` — если токен неизвестен (база пересоздана), создать аккаунт заново с этим токеном (нужен `save`)
+  - `stale: true` — в облаке сохранение с бОльшим опытом, `save` не записан (`force: true` — записать всё равно)
 - `GET /api/save?token=` → `{id, name, save, saveAt}`
 - `GET /api/me?token=` → профиль
 - `GET /api/leaderboard?board=rating|wins|level|drift|speed|distance|mode&mode=&map=&len=&limit=&offset=&around=&token=`
   → `{board, total, offset, limit, rows:[{rank,id,name,level,rating,wins,matches,best,bestLabel,…}], me?}`
 - `GET /api/profile/:id` → публичный профиль (без токена и сохранения)
 - `GET /api/players?q=&limit=` → поиск по имени
+- `GET /api/health` → `{ok, store: pg|file|starting, players, records, dbConfigured, error, uptime}` (без секретов)
 - `GET /` → текстовая проверка здоровья (используется Render)
 
 Точные форматы — в шапке `src/api.js`.

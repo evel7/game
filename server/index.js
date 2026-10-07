@@ -318,6 +318,14 @@ setInterval(() => {
 
 const server = http.createServer((req, res) => {
   // HTTP API аккаунтов и таблиц лидеров (/api/...)
+  if (req.url.split('?')[0].replace(/\/+$/, '') === '/api/health') {
+    // диагностика без секретов: подключена ли база и сколько игроков загружено
+    const body = JSON.stringify({ ok: !!accounts, store: accounts ? store.kind : 'starting', players: accounts ? store.players.size : 0,
+      records: accounts ? store.records.size : 0, dbConfigured: !!process.env.DATABASE_URL, error: bootError ? 'нет связи с базой' : null,
+      uptime: Math.round(process.uptime()) });
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' });
+    res.end(body); return;
+  }
   if (accounts && accounts.handleHttp(req, res)) return;
   if (req.url.startsWith('/api/')) { res.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }); res.end('{"error":"Сервер запускается, попробуй через минуту."}'); return; }
   // простая страница: Render проверяет, что сервер жив, и «будит» его
@@ -412,23 +420,23 @@ setInterval(() => {
 }, 20000);
 
 // ---------- хранилище аккаунтов ----------
-let store = null, accounts = null;
+let store = null, accounts = null, bootError = null;
 async function boot() {
-  // база может «просыпаться» (Neon free засыпает) — несколько попыток, затем запасной вариант на файлах
+  // база может «просыпаться» (Neon free засыпает) — пробуем подключаться, пока не получится.
+  // Если DATABASE_URL задан, на файлы НЕ переходим: иначе сервер «забывает» всех игроков из базы
+  // (код восстановления отвечает «не найден»), а новые аккаунты стираются при засыпании Render.
+  // Пока база не готова, /api/... отвечает 503 «Сервер запускается», онлайн-заезды работают.
   for (let attempt = 1; ; attempt++) {
     store = createStore();
     try { await store.init(); break; } catch (e) {
       console.error(`[store] не удалось подключиться к базе (попытка ${attempt}):`, e.message);
       if (store.close) store.close().catch(() => {});
-      if (attempt >= 5) {
-        console.error('[store] ВНИМАНИЕ: работаю на файлах — аккаунты, созданные сейчас, НЕ попадут в базу. Проверь DATABASE_URL.');
-        const prev = process.env.DATABASE_URL; delete process.env.DATABASE_URL;
-        store = createStore(); await store.init(); process.env.DATABASE_URL = prev;
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 3000 * attempt));
+      store = null;
+      bootError = e.message;
+      await new Promise((r) => setTimeout(r, Math.min(30000, 3000 * attempt)));
     }
   }
+  bootError = null;
   accounts = createAccounts(store, {
     registerPerHour: +process.env.REGISTER_PER_HOUR || 10, postPerMin: +process.env.POST_PER_MIN || 60,
   });

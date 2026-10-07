@@ -66,10 +66,11 @@ function createAccounts(store, opts = {}) {
   const carIdOf = opts.carIdOf || ((i) => `car${i}`);
 
   // ---------- игроки ----------
-  function newPlayer(name) {
+  // token — свой токен клиента (пересоздание аккаунта, который сервер потерял), иначе новый случайный
+  function newPlayer(name, token = null) {
     let id;
     do { id = crypto.randomBytes(5).toString('hex'); } while (store.players.has(id));
-    const token = crypto.randomBytes(32).toString('hex');
+    token = token || crypto.randomBytes(32).toString('hex');
     const p = {
       id, tokenHash: sha256(token), name: cleanName(name), rating: START_RATING, wins: 0, matches: 0, level: 1, updatedAt: Date.now(),
       data: { createdAt: Date.now(), stats: null, online: { losses: 0, modeStats: {}, history: [] } },
@@ -296,7 +297,16 @@ function createAccounts(store, opts = {}) {
       json(res, 200, { id: p.id, token, recovery: fmtRecovery(token), name: p.name, profile: publicProfile(p) });
     },
     'POST /api/sync': async (req, res, body) => {
-      const p = byToken(tokenOf(req, body));
+      const tok = tokenOf(req, body);
+      let p = byToken(tok), recreated = false;
+      if (!p && body.recreate && normToken(tok) && body.save) {
+        // сервер потерял аккаунт (базу пересоздали/очистили), а у клиента остался прогресс и код:
+        // создаём аккаунт заново с тем же токеном — старый код восстановления снова работает.
+        // Токен — 256 бит случайности, совпасть с чужим не может; лимит как у регистрации.
+        if (!regLimit(ipOf(req))) return err(res, 429, 'Слишком много регистраций с этого адреса. Попробуй через час.');
+        p = newPlayer(body.name, normToken(tok)).p;
+        recreated = true;
+      }
       if (!p) return err(res, 401, 'Аккаунт не найден: неверный токен или код восстановления.');
       let saveStr = null;
       if (body.save !== undefined && body.save !== null) {
@@ -304,6 +314,7 @@ function createAccounts(store, opts = {}) {
         if (Buffer.byteLength(saveStr) > SAVE_MAX) return err(res, 413, 'Сохранение слишком большое (больше 128 КБ).');
       }
       if (body.name !== undefined) p.name = cleanName(body.name);
+      const statsBefore = p.data.stats;
       const stats = cleanStats(body.stats);
       if (stats) { p.data.stats = stats; p.level = stats.level; }
       let improved = 0;
@@ -313,10 +324,15 @@ function createAccounts(store, opts = {}) {
           if (r && store.putRecord(r)) improved++;
         }
       }
-      if (saveStr !== null) { p.data.saveSize = Buffer.byteLength(saveStr); p.data.saveAt = Date.now(); }
+      // защита от перезаписи: если в облаке прогресс с бОльшим опытом (опыт только растёт), а устройство
+      // прислало более старый (например, ноутбук не открывали неделю, а играли на телефоне) — сохранение не трогаем
+      const cloudXp = p.data.saveXp || 0, newXp = stats ? stats.xp : clampInt(body.save && body.save.profile && body.save.profile.xp, 0, 1e12, 0);
+      const stale = saveStr !== null && !body.force && cloudXp > newXp;
+      if (stats && stale && p.data.stats) { p.data.stats = statsBefore; p.level = statsBefore.level; }
+      if (saveStr !== null && !stale) { p.data.saveSize = Buffer.byteLength(saveStr); p.data.saveAt = Date.now(); p.data.saveXp = newXp; }
       store.touchPlayer(p);
-      if (saveStr !== null) await store.putSave(p.id, saveStr);
-      json(res, 200, { ok: true, improved, profile: publicProfile(p) });
+      if (saveStr !== null && !stale) await store.putSave(p.id, saveStr);
+      json(res, 200, { ok: true, id: p.id, recreated, stale, saveAt: p.data.saveAt || null, cloudXp: p.data.saveXp || 0, improved, profile: publicProfile(p) });
     },
     'GET /api/save': async (req, res, body, q) => {
       const p = byToken(tokenOf(req, null, q));
@@ -324,7 +340,7 @@ function createAccounts(store, opts = {}) {
       const s = await store.getSave(p.id);
       let save = null;
       if (s) try { save = JSON.parse(s); } catch { save = null; }
-      json(res, 200, { id: p.id, name: p.name, save, saveAt: p.data.saveAt || null });
+      json(res, 200, { id: p.id, name: p.name, save, saveAt: p.data.saveAt || null, saveXp: p.data.saveXp || 0 });
     },
     'GET /api/me': async (req, res, body, q) => {
       const p = byToken(tokenOf(req, null, q));
