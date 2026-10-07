@@ -682,7 +682,11 @@ export class Track {
   // проверка, что точка достаточно далеко от дороги (с учётом соседних участков)
   clearOfRoad(x, z, i, margin) {
     const lim = (this.wall + margin) ** 2;
-    for (let j = Math.max(this.base, i - 90); j <= Math.min(this.lastIdx, i + 90); j += 3) {
+    // проверяем далеко вперёд и назад: трасса может петлять и вернуться к дереву (раньше ёлка вставала прямо на дорогу)
+    const far = Math.max(90, Math.ceil(Math.sqrt((x - this.P(i).x) ** 2 + (z - this.P(i).z) ** 2) * 2.5));
+    const stp = far > 200 ? 4 : 3;
+    this.ensure(i + far); // дорога впереди генерируется заранее (детерминированно), чтобы дерево не встало на будущий участок
+    for (let j = Math.max(this.base, i - far); j <= Math.min(this.lastIdx, i + far); j += stp) {
       const p = this.P(j);
       if ((p.x - x) ** 2 + (p.z - z) ** 2 < lim) return false;
     }
