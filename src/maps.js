@@ -176,7 +176,7 @@ export const MAPS = [
     track: { minR: 38, maxR: 170, straight: [50, 170], hill: 1.5, events: false },
     props: ['hummock', 'drift', 'hut', 'pine'],
     decor: [['hummock', 8, 4, 90, 0.6, 1.8], ['drift', 8, 1.5, 60, 0.8, 2.2, 2, false], ['hut', 1, 10, 50, 1, 1.2, 5, true, 0.35],
-      ['pine', 10, 150, 240, 1.2, 2.0, 20, false]],
+      ['pine', 10, 160, 260, 1.2, 2.0, 40, false]],
   },
 ];
 
