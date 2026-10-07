@@ -25,7 +25,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const TIME_MODES = ['race', 'free', 'time', 'clean'];
+const TIME_MODES = ['race', 'free', 'time', 'clean', 'drag', 'hill', 'slalom']; // drag: len = код дистанции 1/2/3 (402/804/1609 м)
 const recKey = (r) => `${r.player_id}|${r.mode}|${r.map}|${r.len}`;
 // лучше ли результат a, чем b (по времени — для режимов «на время» с финишем, иначе по очкам)
 function recBetter(a, b) {

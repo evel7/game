@@ -332,3 +332,11 @@ body.inspect #game { cursor: grab; }
 @keyframes phflash { from { opacity: .85; } to { opacity: 0; } }
 body.photo #fps, body.photo #countdown { display: none !important; }
 body.photo #game { cursor: grab; }
+
+/* драг: лампа переключения; кнопки передач на телефоне — только с ручной коробкой */
+.hud-shift { margin-top: 4px; display: inline-block; padding: 3px 12px; border-radius: 10px; font-weight: 800; background: rgba(0,0,0,.4); color: #ccc; letter-spacing: .5px; }
+.hud-shift.ok { background: #1fbf3a; color: #fff; box-shadow: 0 0 18px #36ff5a; }
+.hud-shift.late { background: #d4231c; color: #fff; }
+.gear-btn { display: none; }
+body.manual .gear-btn { display: flex; }
+.drag-need { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: rgba(255,80,60,.18); border: 1px solid rgba(255,80,60,.5); }

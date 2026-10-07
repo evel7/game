@@ -296,7 +296,7 @@ export function claimDaily() {
 }
 
 // ---------- награда за заезд ----------
-const MODE_MULT = { race: 1, drift: 1, free: 0.5, field: 0.5, time: 1, speed: 1, clean: 1.25, escape: 1.1, elim: 1.3 };
+const MODE_MULT = { race: 1, drift: 1, free: 0.5, field: 0.5, time: 1, speed: 1, clean: 1.25, escape: 1.1, elim: 1.3, drag: 1.2, zones: 1.15, slalom: 1.15, hill: 1.15, attack: 1.1 };
 // g — состояние заезда; extra: { isRecord, carId, mapIdx, mapId, win }
 export function raceReward(g, extra = {}) {
   const km = g.dist / 1000, mult = (MODE_MULT[g.mode.id] ?? 1) * (g.online ? 1.5 : 1);
@@ -308,6 +308,9 @@ export function raceReward(g, extra = {}) {
   if (g.bestDrift >= 2000) add('Комбо-дрифт', Math.min(4000, g.bestDrift / 12), Math.min(1500, g.bestDrift / 30));
   if (g.overtakes) add('Обгоны', g.overtakes * 60, g.overtakes * 25);
   if (g.speedPts) add('Спидкамеры', g.speedPts / 20, g.speedPts / 40);
+  if (g.dg && g.dg.perfect) add('Идеальные переключения', g.dg.perfect * 120, g.dg.perfect * 40);
+  if (g.sl && g.sl.pts) add('Слалом', g.sl.pts / 20, g.sl.pts / 40);
+  if (g.zn && g.zn.total) add('Дрифт-зоны', g.zn.total / 40, g.zn.total / 60);
   if (g.finished && g.lenKm) add('Финиш', g.lenKm * 120, g.lenKm * 50);
   if (extra.win) add('Победа', 1800, 500);
   else if (g.place && g.place <= 3 && g.finished) add(`${g.place} место`, [0, 0, 1100, 650][g.place], [0, 0, 250, 150][g.place]);

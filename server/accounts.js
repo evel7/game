@@ -13,7 +13,7 @@ const path = require('path');
 const { recBetter, TIME_MODES } = require('./store');
 
 // ---------- справочники ----------
-const MODE_IDS = ['race', 'drift', 'free', 'time', 'elim', 'speed', 'clean', 'escape', 'field'];
+const MODE_IDS = ['race', 'drift', 'free', 'time', 'elim', 'speed', 'clean', 'escape', 'field', 'drag', 'zones', 'slalom', 'hill', 'attack'];
 const FALLBACK_MAPS = ['desert', 'snow', 'city', 'field_asphalt', 'field_beach', 'field_snow', 'taiga', 'riviera', 'magma', 'sakura', 'baikal'];
 // порядок карт берём из src/maps.js (индекс карты в онлайне → её id); если файла нет — запасной список
 function loadMapIds() {

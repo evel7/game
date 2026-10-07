@@ -38,8 +38,28 @@ const MODES = [
     bonus: () => 0 },
   { id: 'escape', name: 'Побег', desc: 'Сзади едет стена и всё время ускоряется. Догонит — конец. Как далеко уедешь?', timer: 0, rivals: 0,
     bonus: () => 0 },
+  // ----- новые режимы (только офлайн) -----
+  { id: 'drag', name: 'Драг', desc: 'Прямая 402 / 804 / 1609 м один на один. Старт по светофору, передачи переключаешь сам: лови зелёную зону тахометра. Только с ручной коробкой.', timer: 0, rivals: 1, offline: true, place: true, drag: true,
+    bonus: () => 0 },
+  { id: 'zones', name: 'Дрифт-зоны', desc: 'Очки дают только в размеченных зонах — там дрифт стоит ×2. Хорошая зона добавляет время. Вне зон занос не считается.', timer: 45, rivals: 0, offline: true,
+    bonus: () => 0 },
+  { id: 'slalom', name: 'Слалом', desc: 'Проезжай через ворота из конусов. Чисто — очки, серия и +время; пропустил ворота или сбил конус — штраф.', timer: 40, rivals: 0, offline: true,
+    bonus: (n) => Math.max(12, 22 - n) },
+  { id: 'hill', name: 'Король горы', desc: 'Скоростной спуск с горы по серпантину: машина сама разгоняется под уклон. Доберись до финиша первым.', timer: 0, rivals: 3, offline: true, place: true, hill: true,
+    bonus: () => 0 },
+  { id: 'attack', name: 'Тайм-атак', desc: '30 секунд на старте. Каждый чекпоинт добавляет время — чем быстрее до него долетел, тем больше. Сплиты сравниваются с рекордом. Бесконечная трасса.', timer: 30, rivals: 0, offline: true,
+    bonus: () => 0 },
 ];
 MODES[0].place = true;
+const DRAG_M = { 1: 402, 2: 804, 3: 1609 }; // драг: код длины → метры (402 м = ¼ мили)
+const lenLabel = (modeId, len) => (modeId === 'drag' ? `${DRAG_M[len] || 402} м` : len ? `${len} км` : '∞');
+// длина трассы для режима: драг — свой код, король горы — всегда с финишем, тайм-атак — всегда бесконечная
+function modeLen(mode, len) {
+  if (mode.drag) return DRAG_M[sel.dragLen] ? sel.dragLen : 1;
+  if (mode.id === 'attack') return 0;
+  if (mode.hill) return len || 5;
+  return len;
+}
 const ELIM_INT = 30;   // с: интервал выбывания
 const isPlaceMode = (m) => !!m.place;
 // на картах-«Полигонах» трассы нет: свободная езда, очки за дрифт, без таймера и соперников
@@ -61,9 +81,10 @@ if (!settings.v3) { settings.v3 = 1; settings.autoRes = false; if (settings.assi
 if (!settings.handling) settings.handling = settings.easy === false ? 'real' : 'easy';
 settings.easy = settings.handling === 'easy';
 // len — длина трассы в км (0 = бесконечная); fieldMode — полигон: obst (с препятствиями), clean (чистое поле), flat (чистое и ровное)
-const sel = Object.assign({ car: 0, colors: {}, mode: 0, map: 0, len: 10, fieldMode: 'obst' }, store.get('sel', {}));
+const sel = Object.assign({ car: 0, colors: {}, mode: 0, map: 0, len: 10, fieldMode: 'obst', dragLen: 1 }, store.get('sel', {}));
 sel.mm = Object.assign({ mode: 'race', len: 10, size: 5, carRule: 'any', bots: 1 }, sel.mm || {}); // фильтры быстрого матча
 if (sel.car >= CARS.length) sel.car = 0;
+if (sel.mode >= MODES.length) sel.mode = 0;
 // прогресс: ездить можно только на купленных машинах (в гараже можно смотреть любые)
 const ownedIdx = () => CARS.findIndex((c) => c.id === 'kaze');
 if (!PG.owns(CARS[sel.car])) sel.car = Number.isInteger(sel.ownedCar) && CARS[sel.ownedCar] && PG.owns(CARS[sel.ownedCar]) ? sel.ownedCar : ownedIdx();
@@ -217,7 +238,7 @@ function buildWorld(mapIdx, seed, opts = {}) {
   const fm = opts.fieldMode ?? sel.fieldMode;
   const track = map.field
     ? new Field(group, map, seed, +settings.quality, { props: fm === 'obst', flat: fm === 'flat' })
-    : new Track(group, map, seed, +settings.quality, { finishIdx: opts.finishIdx ?? Infinity, draw: +settings.draw });
+    : new Track(group, map, seed, +settings.quality, { finishIdx: opts.finishIdx ?? Infinity, draw: +settings.draw, profile: opts.profile });
   const farPlane = new THREE.Mesh(new THREE.PlaneGeometry(5000, 5000), new THREE.MeshLambertMaterial({ color: map.ground.far }));
   farPlane.rotation.x = -Math.PI / 2; group.add(farPlane);
 
@@ -519,6 +540,172 @@ function newGame(lenKm) {
   };
 }
 
+// ======================= особые режимы: драг, дрифт-зоны, слалом, король горы, тайм-атак =======================
+function initModeState() {
+  const id = G.mode.id;
+  if (id === 'drag') G.dg = { react: null, perfect: 0, early: 0, late: 0, t100: 0 };
+  if (id === 'slalom') G.sl = { gates: [], next: 110, side: Math.random() < 0.5 ? 1 : -1, combo: 0, bestCombo: 0, clean: 0, miss: 0, cones: 0, pts: 0, flying: [] };
+  if (id === 'zones') G.zn = { list: [], next: 150, total: 0, done: 0, best: 0, perfect: 0 };
+  if (id === 'attack') G.at = { lastT: 0, splits: [], rec: (records[recKey('attack', W.map.id, 0)] || {}).splits || null };
+}
+const isDriftingNow = (veh) => { const ang = Math.abs(veh.beta) * 57.3; return veh.speed > 8.5 && ang > 11 && ang < 110 && veh.u > 2 && !veh.offroad; };
+const lanePos = (i, lat) => { const p = W.track.P(i); return { x: p.x + p.lx * lat, y: p.y, z: p.z + p.lz * lat, h: p.h }; };
+
+// ---------- слалом: ворота из двух конусов ----------
+let coneGeo = null;
+const coneMats = {};
+function makeCone(color) {
+  coneGeo ||= new THREE.ConeGeometry(0.26, 0.72, 10).translate(0, 0.36, 0);
+  coneGeo.userData = { shared: true };
+  const m = coneMats[color] ||= new THREE.MeshStandardMaterial({ color, roughness: 0.55, emissive: color, emissiveIntensity: W.map.night ? 0.6 : 0.12 });
+  const mesh = new THREE.Mesh(coneGeo, m); mesh.userData.sharedGeo = true; mesh.castShadow = false;
+  return mesh;
+}
+const GATE_W = 5.2; // м: ширина ворот
+function spawnGate(sl) {
+  const tr = W.track; tr.ensure(sl.next + 2);
+  const c = sl.side * Math.min(tr.hw - GATE_W / 2 - 0.3, tr.hw * 0.42);
+  const g = { idx: sl.next, c, side: sl.side, cones: [] };
+  const color = sl.side > 0 ? 0x2f7bff : 0xff3b30; // синие ворота слева, красные справа
+  for (const off of [-GATE_W / 2, GATE_W / 2]) {
+    const p = lanePos(g.idx, c + off), m = makeCone(color);
+    m.position.set(p.x, p.y, p.z); W.group.add(m);
+    g.cones.push({ m, lat: c + off });
+  }
+  sl.gates.push(g);
+  sl.side = -sl.side;
+  sl.next += Math.round((26 + Math.random() * 12) / SP);
+}
+function slalomPenalty(sec, text) {
+  if (G.finite) G.elapsed += sec; else G.time = Math.max(0, G.time - sec * 1.5);
+  showMsg(`${text}  ${G.finite ? '+' : '−'}${G.finite ? sec : sec * 1.5} с`, 1.3, '#ff6b6b');
+}
+function updateSlalom(dt, veh) {
+  const sl = G.sl;
+  while (sl.next < veh.idx + 260 && sl.next < G.finishIdx - 30) spawnGate(sl);
+  while (sl.gates.length && veh.idx >= sl.gates[0].idx) {
+    const g = sl.gates.shift();
+    const d = Math.abs(veh.lat - g.c);
+    const halfCar = (veh.spec.body.W || 1.8) / 2;
+    if (d <= GATE_W / 2 - halfCar * 0.7) {
+      sl.combo++; sl.clean++; sl.bestCombo = Math.max(sl.bestCombo, sl.combo);
+      const pts = 100 + 25 * Math.min(sl.combo, 20); sl.pts += pts;
+      if (!G.finite) G.time += 1.2;
+      showMsg(`ВОРОТА ×${sl.combo}  +${pts}${G.finite ? '' : '  +1.2 с'}`, 0.9, '#7cff4f'); audio.score();
+    } else if (d <= GATE_W / 2 + halfCar) {
+      // зацепил конус: он улетает
+      const cone = g.cones.reduce((a, b) => (Math.abs(b.lat - veh.lat) < Math.abs(a.lat - veh.lat) ? b : a));
+      sl.flying.push({ m: cone.m, vx: veh.vx * 0.6 + (Math.random() - 0.5) * 3, vy: 4 + Math.random() * 3, vz: veh.vz * 0.6 + (Math.random() - 0.5) * 3, t: 0 });
+      sl.cones++; sl.combo = 0; G.hits++;
+      slalomPenalty(1, 'СБИЛ КОНУС');
+    } else {
+      sl.miss++; sl.combo = 0;
+      slalomPenalty(2, 'ПРОПУСК ВОРОТ');
+    }
+    g.passed = true;
+    setTimeout(() => { for (const c of g.cones) if (!sl.flying.some((f) => f.m === c.m)) W && W.group.remove(c.m); }, 2500);
+  }
+  for (const f of sl.flying) {
+    f.t += dt; f.vy -= 9.8 * dt;
+    f.m.position.x += f.vx * dt; f.m.position.y += f.vy * dt; f.m.position.z += f.vz * dt;
+    f.m.rotation.x += dt * 7; f.m.rotation.z += dt * 5;
+  }
+  sl.flying = sl.flying.filter((f) => { if (f.t > 2.5) { W.group.remove(f.m); return false; } return true; });
+}
+
+// ---------- дрифт-зоны: размеченные участки, где дрифт стоит ×2 ----------
+let zoneTex = null;
+function zoneTexture() {
+  if (zoneTex) return zoneTex;
+  const c = document.createElement('canvas'); c.width = 64; c.height = 128;
+  const x = c.getContext('2d');
+  x.fillStyle = 'rgba(255,40,200,0.35)'; x.fillRect(0, 0, 64, 128);
+  x.fillStyle = 'rgba(255,255,255,0.55)';
+  x.beginPath(); x.moveTo(0, 64); x.lineTo(32, 20); x.lineTo(64, 64); x.lineTo(64, 84); x.lineTo(32, 40); x.lineTo(0, 84); x.closePath(); x.fill(); // шеврон
+  x.fillStyle = 'rgba(255,230,0,0.9)'; x.fillRect(0, 0, 5, 128); x.fillRect(59, 0, 5, 128);
+  zoneTex = new THREE.CanvasTexture(c); zoneTex.wrapS = zoneTex.wrapT = THREE.RepeatWrapping; zoneTex.colorSpace = THREE.SRGBColorSpace;
+  return zoneTex;
+}
+function spawnZone(zn) {
+  const tr = W.track, i0 = zn.next, i1 = i0 + Math.round((120 + Math.random() * 80) / SP);
+  tr.ensure(i1 + 2);
+  const n = i1 - i0 + 1, pos = new Float32Array(n * 2 * 3), uv = new Float32Array(n * 2 * 2), idx = [];
+  for (let k = 0; k < n; k++) {
+    const p = tr.P(i0 + k), w = tr.hw;
+    pos.set([p.x + p.lx * w, p.y + 0.045, p.z + p.lz * w, p.x - p.lx * w, p.y + 0.045, p.z - p.lz * w], k * 6);
+    uv.set([0, k * SP / 6, 1, k * SP / 6], k * 4);
+    if (k) { const a = (k - 1) * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); geo.setIndex(idx);
+  const mat = new THREE.MeshBasicMaterial({ map: zoneTexture(), transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 });
+  const mesh = new THREE.Mesh(geo, mat); W.group.add(mesh);
+  zn.list.push({ i0, i1, mesh, pts: 0 });
+  zn.next = i1 + Math.round((180 + Math.random() * 160) / SP);
+}
+function updateZones(dt, veh) {
+  const zn = G.zn;
+  while (zn.next < veh.idx + 320 && zn.next < G.finishIdx - 80) spawnZone(zn);
+  const z = zn.list[0];
+  if (!z) return;
+  if (veh.idx >= z.i0 && veh.idx <= z.i1) {
+    if (isDriftingNow(veh)) z.pts += Math.abs(veh.beta) * 57.3 * veh.speed * dt * 0.7 * G.drift.mult;
+  } else if (veh.idx > z.i1) {
+    zn.list.shift();
+    const pts = Math.floor(z.pts);
+    zn.total += pts; zn.done++; zn.best = Math.max(zn.best, pts);
+    const grade = pts < 400 ? ['ЗОНА ПРОВАЛЕНА', '#ff6b6b'] : pts < 3000 ? ['ЗОНА: ХОРОШО', '#ffcc00'] : pts < 7000 ? ['ЗОНА: ОТЛИЧНО', '#7cff4f'] : ['ЗОНА: ИДЕАЛЬНО!', '#ff4fd8'];
+    if (pts >= 7000) zn.perfect++;
+    let bonus = 0;
+    if (!G.finite && pts >= 400) { bonus = Math.min(12, Math.round(pts / 600 * 10) / 10); G.time += bonus; }
+    showMsg(`${grade[0]}  +${pts.toLocaleString('ru-RU')}${bonus ? `  +${bonus} с` : ''}`, 1.8, grade[1]);
+    if (pts >= 400) audio.score();
+    setTimeout(() => { if (W) { W.group.remove(z.mesh); z.mesh.geometry.dispose(); } }, 3000);
+  }
+}
+function zoneHint(veh) {
+  const z = G.zn.list[0];
+  if (!z) return 'дрифт-зон больше нет';
+  if (veh.idx >= z.i0) return `🔥 В ЗОНЕ: ${Math.floor(z.pts).toLocaleString('ru-RU')} · осталось ${Math.max(0, Math.round((z.i1 - veh.idx) * SP))} м`;
+  return `до дрифт-зоны ${Math.round((z.i0 - veh.idx) * SP)} м`;
+}
+
+// ---------- драг: светофор, реакция, оценка переключений ----------
+const SHIFT_OK = 0.86, SHIFT_LATE = 0.975;
+function dragShift(veh) {
+  if (!G.dg || state !== 'race' || !settings.manual || veh.gear <= 0 || veh.gear >= veh.spec.gears.length) return;
+  const r = veh.rpm / veh.spec.redline;
+  if (r >= SHIFT_OK && r < SHIFT_LATE) {
+    G.dg.perfect++;
+    veh.vx += Math.sin(veh.h) * 0.5; veh.vz += Math.cos(veh.h) * 0.5; // идеальное переключение — маленький «пинок»
+    showMsg('ИДЕАЛЬНОЕ ПЕРЕКЛЮЧЕНИЕ!', 0.8, '#7cff4f'); audio.score();
+  } else if (r < SHIFT_OK) { G.dg.early++; showMsg('РАНО', 0.6, '#ffcc00'); }
+  else { G.dg.late++; showMsg('ПОЗДНО — ОТСЕЧКА', 0.6, '#ff6b6b'); }
+}
+function updateDrag(veh, inp) {
+  const dg = G.dg;
+  if (dg.react === null && inp.throttle > 0.5) { dg.react = G.elapsed; showMsg(`РЕАКЦИЯ ${dg.react.toFixed(3)} с`, 1.2, dg.react < 0.3 ? '#7cff4f' : '#ffcc00'); }
+  if (!dg.t100 && veh.speed * 3.6 >= 100) dg.t100 = G.elapsed;
+}
+
+// ---------- король горы: машину тянет вниз по уклону ----------
+function hillGravity(veh, slope, h) {
+  const a = -9.81 * slope / Math.sqrt(1 + slope * slope) * STEP;
+  veh.vx += Math.sin(h) * a; veh.vz += Math.cos(h) * a;
+}
+
+// ---------- тайм-атак: время за чекпоинт зависит от скорости ----------
+function attackCheckpoint(kmhNow) {
+  const at = G.at, seg = Math.max(0.5, G.elapsed - at.lastT), avg = CP_EVERY * SP / seg * 3.6;
+  at.lastT = G.elapsed; at.splits.push(Math.round(G.elapsed * 1000) / 1000);
+  const bonus = Math.round(clamp(5 + avg / 10, 5, 30) * 10) / 10;
+  G.time += bonus;
+  const k = at.splits.length - 1, ref = at.rec && at.rec[k];
+  const split = ref ? `  ·  ${fmtDelta(G.elapsed - ref)}` : '';
+  showMsg(`ЧЕКПОИНТ  +${bonus} с  ·  ${Math.round(avg)} км/ч${split}`, 2, ref && G.elapsed > ref ? '#ff9f1c' : '#7cff4f');
+  return bonus;
+}
+
 // ======================= призрак и повтор =======================
 const ghostKeyFor = (modeId, mapId, lenKm) => recKey(modeId, mapId, lenKm);
 // полупрозрачная копия машины из записи (свои материалы, без контуров и света фар)
@@ -568,17 +755,21 @@ function ghostDelta() {
 }
 const fmtDelta = (d) => `${d <= 0 ? '−' : '+'}${Math.abs(d).toFixed(2)} с`;
 
-const finishIdxFor = (lenKm) => (lenKm > 0 ? 6 + Math.round(lenKm * 1000 / SP) : Infinity);
+const finishIdxFor = (lenKm, modeId) => (lenKm > 0 ? 6 + Math.round((modeId === 'drag' ? DRAG_M[lenKm] || 402 : lenKm * 1000) / SP) : Infinity);
 function startRace(opts = {}) {
   audio.init();
   if (!opts.online) ensureOwnedCar();
-  const lenKm = opts.len ?? (MAPS[sel.map].field ? 0 : sel.len);
+  const mode0 = curMode();
+  if (!opts.online && mode0.drag && !settings.manual) { showScreen('setup'); return; }
+  const lenKm = opts.len ?? (MAPS[sel.map].field ? 0 : modeLen(mode0, sel.len));
+  const profile = mode0.drag ? 'drag' : mode0.hill ? 'hill' : '';
   // призрак лучшего заезда: едем по ТОЙ ЖЕ трассе (тот же seed), иначе сравнение нечестное
   const gKey = ghostKeyFor(curMode().id, MAPS[sel.map].id, MAPS[sel.map].field ? 0 : lenKm);
   const ghost = !opts.online && !MAPS[sel.map].field && settings.ghost && !opts.newTrack ? GH.loadGhost(gKey) : null;
   const seed = opts.seed ?? (ghost ? ghost.seed : (Math.random() * 1e6) | 0);
-  buildWorld(sel.map, seed, { finishIdx: finishIdxFor(lenKm), fieldMode: opts.fieldMode });
+  buildWorld(sel.map, seed, { finishIdx: finishIdxFor(lenKm, mode0.id), fieldMode: opts.fieldMode, profile });
   newGame(lenKm);
+  initModeState();
   G.online = !!opts.online;
   G.seed = seed; G.gKey = gKey;
   // запись заезда (для повтора и нового призрака); в онлайне и на полигоне не пишем
@@ -593,7 +784,7 @@ function startRace(opts = {}) {
   showScreen(null);
   $('hud').classList.remove('hidden');
   if (isTouch) $('touch').classList.remove('hidden');
-  $('hud-mode').textContent = `${G.online ? 'Онлайн · ' : ''}${G.mode.name} · ${W.map.name}${G.finite ? ` · ${G.lenKm} км` : ''}`;
+  $('hud-mode').textContent = `${G.online ? 'Онлайн · ' : ''}${G.mode.name} · ${W.map.name}${G.finite ? ` · ${lenLabel(G.mode.id, G.lenKm)}` : ''}`;
   viewShift = { x: 0, y: 0 }; updateViewOffset();
   updateCamera(0.016, true);
   // заранее компилируем шейдеры всех объектов сцены, чтобы не было подвисаний в первые секунды заезда
@@ -679,6 +870,7 @@ function physicsStep(inp) {
   veh.idx = pr.idx; veh.lat = pr.lat; veh.roadY = pr.y; veh.slope = pr.slope;
   veh.offroad = Math.abs(pr.lat) > track.hw + 0.3 && Math.abs(pr.k) < 1 / 170;
   veh.trackH = pr.h;
+  if (G && G.mode.hill && state === 'race') hillGravity(veh, pr.slope || 0, pr.h);
   // «стена позади»: во всех режимах на трассе (Гонка, Дрифт, Свободная езда) стена едет в 5 м позади
   // самой дальней точки, до которой доехал игрок, — назад ехать нельзя.
   // Онлайн: у каждого игрока стена своя (считается на его компьютере по его же машине) — лидер никого не «тянет»,
@@ -804,14 +996,15 @@ function updateRace(dt) {
     const n = Math.ceil(G.cd - 0.6);
     if (n !== G.cdShown) {
       G.cdShown = n;
-      $('countdown').textContent = n > 0 ? n : 'СТАРТ!';
+      $('countdown').textContent = G.mode.drag ? (n > 0 ? '🟡'.repeat(4 - n) : '🟢 GO!') : n > 0 ? n : 'СТАРТ!';
       audio.countdown(n <= 0);
     }
     // можно погазовать на старте
     veh.rpm += ((veh.spec.idle + raw.throttle * veh.spec.redline * 0.75) - veh.rpm) * Math.min(1, dt * 6);
     if (G.cd <= 0.6) { state = 'race'; G.started = true; setTimeout(() => { $('countdown').textContent = ''; }, 700); }
   } else {
-    for (const e of evs) { if (e === 'shiftUp') inp.shiftUp = true; if (e === 'shiftDown') inp.shiftDown = true; }
+    for (const e of evs) { if (e === 'shiftUp') { inp.shiftUp = true; dragShift(veh); } if (e === 'shiftDown') inp.shiftDown = true; }
+    if (G.dg && state === 'race') updateDrag(veh, inp);
     G.acc += dt;
     let n = 0;
     while (G.acc >= STEP && n < 24) { G.acc -= STEP; physicsStep(inp); n++; }
@@ -897,6 +1090,8 @@ function updateScoring(dt, veh) {
     }
   }
 
+  if (G.sl) updateSlalom(dt, veh);
+  if (G.zn) updateZones(dt, veh);
   // --- финиш ---
   if (G.finite && veh.idx >= G.finishIdx) {
     // точное время пересечения линии внутри кадра (интерполяция), а не «кадр, в котором заметили» —
@@ -919,7 +1114,8 @@ function updateScoring(dt, veh) {
       G.speedPts += pts; G.cams++; G.bestCam = Math.max(G.bestCam, kmh);
       cam = `📸 ${speedStr(kmh)}  +${pts}  ·  `;
     }
-    if (G.mode.timer && !G.finite) {
+    if (G.at) attackCheckpoint(kmh);
+    else if (G.mode.timer && !G.finite) {
       const bonus = Math.round(G.mode.bonus(G.cpCount - 1));
       G.time += bonus;
       showMsg(`${cam}ЧЕКПОИНТ  +${bonus} с`, 1.8, '#ffcc00');
@@ -979,6 +1175,11 @@ function calcScore() {
   if (id === 'speed') return G.speedPts + Math.floor(d / 2);
   if (id === 'clean') return Math.floor((d + G.driftTotal / 4) * (1 + Math.floor(G.dist / 1000) * 0.1)); // +10% за каждый чистый км
   if (id === 'escape') return d + Math.floor(G.driftTotal / 10);
+  if (id === 'drag') return d;
+  if (id === 'zones') return G.zn ? G.zn.total : 0;
+  if (id === 'slalom') return (G.sl ? G.sl.pts : 0) + Math.floor(d / 4);
+  if (id === 'hill') return d + G.overtakes * 300 + Math.floor(G.driftTotal / 6);
+  if (id === 'attack') return d + G.cpCount * 250;
   if (id === 'elim') return d + G.overtakes * 300 + G.elimCount * 1000 + (G.elimWin ? 5000 : 0);
   return d;
 }
@@ -987,13 +1188,14 @@ function calcScore() {
 const recKey = (modeId, mapId, lenKm) => `${modeId}_${mapId}${lenKm ? '_' + lenKm : ''}`;
 // на трассе с финишем в Гонке и Свободной езде рекорд — лучшее время, в Дрифте — очки
 const onlinePlace = (t) => 1 + net.results.filter((r) => r.finished && r.id !== net.id && r.time < t).length;
-const byTime = (modeId, lenKm) => lenKm > 0 && ['race', 'free', 'time', 'clean'].includes(modeId);
+const byTime = (modeId, lenKm) => lenKm > 0 && ['race', 'free', 'time', 'clean', 'drag', 'hill', 'slalom'].includes(modeId);
 function finishRace(finished = false) {
   if (state === 'over') return;
   if (G.drift.active && G.drift.pts > 30) { G.driftTotal += Math.floor(G.drift.pts); G.bestDrift = Math.max(G.bestDrift, Math.floor(G.drift.pts)); }
   G.score = calcScore();
   G.finished = finished;
-  if (finished && G.mode.id === 'race' && W.rivals.length && !G.elimWin) G.place = 1 + W.rivals.filter((r) => !r.out && r.finOrder !== undefined).length;
+  if (finished && G.dg) G.score = Math.round(100000 / Math.max(1, G.elapsed)) + G.dg.perfect * 500;
+  if (finished && (G.mode.id === 'race' || G.mode.drag || G.mode.hill) && W.rivals.length && !G.elimWin) G.place = 1 + W.rivals.filter((r) => !r.out && r.finOrder !== undefined).length;
   // онлайн: место по точному времени финиша, а не по тому, чьё сообщение раньше дошло до сервера
   if (finished && G.mode.id === 'race' && G.online) G.place = onlinePlace(G.elapsed);
   // Дрифт на трассе с финишем: итог = очки дрифта + бонус за время (быстрее 60 км/ч в среднем) + онлайн бонус за место на финише
@@ -1009,7 +1211,7 @@ function finishRace(finished = false) {
   const old = records[key];
   const timeRec = byTime(G.mode.id, G.lenKm);
   const isRec = !G.online && (timeRec ? finished && (!old || !old.time || G.elapsed < old.time) : G.score > 0 && (!old || G.score > old.score));
-  const entry = { score: G.score, time: finished ? G.elapsed : 0, dist: Math.floor(G.dist), drift: G.bestDrift, car: CARS[sel.car].name, date: new Date().toLocaleDateString('ru-RU'), ts: Date.now(), maxSpeed: Math.round(G.maxSpeed) };
+  const entry = { score: G.score, time: finished ? G.elapsed : 0, dist: Math.floor(G.dist), drift: G.bestDrift, car: CARS[sel.car].name, date: new Date().toLocaleDateString('ru-RU'), ts: Date.now(), maxSpeed: Math.round(G.maxSpeed), ...(G.at ? { splits: G.at.splits } : {}) };
   if (isRec) records[key] = entry;
   // личный рекорд этой машины на этой карте/режиме/длине
   const carKey = key + '|' + CARS[sel.car].id, oldCar = records[carKey];
@@ -1043,6 +1245,11 @@ function finishRace(finished = false) {
   if (G.mode.id === 'drift' && G.finite) { rows.push(['Бонус за время', '+' + G.timeBonus.toLocaleString('ru-RU')]); if (G.online) rows.push(['Бонус за место на финише', G.finPlace ? `${G.finPlace}-й · +${G.placeBonus.toLocaleString('ru-RU')}` : '—']); }
   if (G.mode.id === 'speed') rows.push(['Спидкамеры', `${G.cams} · лучшая ${speedStr(G.bestCam)} · ${G.speedPts.toLocaleString('ru-RU')} очк.`]);
   if (G.mode.id === 'elim') rows.push(['Выбыло соперников', G.elimCount]);
+  if (G.dg) rows.push(['Реакция на старте', G.dg.react !== null ? `${G.dg.react.toFixed(3)} с` : '—'], ['0–100 км/ч', G.dg.t100 ? `${G.dg.t100.toFixed(2)} с` : '—'],
+    ['Переключения', `идеальных ${G.dg.perfect} · ранних ${G.dg.early} · поздних ${G.dg.late}`]);
+  if (G.sl) rows.push(['Ворота', `чисто ${G.sl.clean} · пропущено ${G.sl.miss} · сбито конусов ${G.sl.cones}`], ['Лучшая серия', `×${G.sl.bestCombo}`]);
+  if (G.zn) rows.push(['Дрифт-зоны', `${G.zn.done} · идеальных ${G.zn.perfect} · лучшая ${G.zn.best.toLocaleString('ru-RU')}`]);
+  if (G.at) rows.push(['Чекпоинты (тайм-атак)', G.at.splits.length]);
   if (G.mode.id === 'escape') rows.push(['Скорость стены', speedStr(G.wallV * 3.6)]);
   rows.push(['Удары', G.hits]);
   if (W.ghost && gdFin !== null) rows.push(['👻 Против призрака', gdFin <= 0 ? `<span class="rw">быстрее на ${Math.abs(gdFin).toFixed(2)} с</span>` : `медленнее на ${gdFin.toFixed(2)} с`]);
@@ -1211,12 +1418,22 @@ function updateHUD(dt) {
   if (G.finite) next = `до финиша ${toFin >= 1000 ? (toFin / 1000).toFixed(2) + ' км' : Math.round(toFin) + ' м'}`;
   if (G.mode.id === 'elim') next = `выбывание через ${Math.max(0, Math.ceil(G.elimT))} с · осталось ${W.rivals.filter((r) => !r.out).length + 1}`;
   if (G.mode.id === 'escape') next = `стена в ${Math.max(0, Math.round((veh.idx - G.wallIdx) * SP))} м · ${speedStr(G.wallV * 3.6)}`;
+  if (G.zn) next = zoneHint(veh) + (G.finite ? ` · до финиша ${Math.round(toFin)} м` : '');
+  if (G.sl) next = `${G.finite ? `до финиша ${toFin >= 1000 ? (toFin / 1000).toFixed(2) + ' км' : Math.round(toFin) + ' м'} · ` : ''}серия ×${G.sl.combo} · ворот ${G.sl.clean}`;
+  if (G.mode.drag) next = `до финиша ${Math.round(toFin)} м`;
   if (G.mode.id === 'clean') next += ` · множитель x${(1 + Math.floor(G.dist / 1000) * 0.1).toFixed(1)}`;
   setText('hud-next', next);
   setText('hud-score', G.score.toLocaleString('ru-RU'));
+  // драг: лампа переключения передач
+  const sh = $('hud-shift');
+  if (G.mode.drag && state === 'race') {
+    const r = veh.rpm / veh.spec.redline, top = veh.gear >= veh.spec.gears.length;
+    sh.className = 'hud-shift' + (top ? '' : r >= SHIFT_LATE ? ' late' : r >= SHIFT_OK ? ' ok' : '');
+    setText('hud-shift', top ? 'высшая передача' : r >= SHIFT_LATE ? 'ОТСЕЧКА!' : r >= SHIFT_OK ? '▲ ПЕРЕКЛЮЧАЙ (E)' : `передача ${veh.gear}`);
+  } else sh.className = 'hud-shift hidden';
   const total = (G.online ? net.players.size : W.rivals.length) + 1;
   const placeStr = G.place && isPlaceMode(G.mode) ? ` · место ${G.place}/${total}` : '';
-  setText('hud-dist', `${(G.dist / 1000).toFixed(2)} км${G.finite ? ` из ${G.lenKm}` : ''}${isPlaceMode(G.mode) && !G.online ? ` · обгонов: ${G.overtakes}` : ''}${placeStr}`);
+  setText('hud-dist', `${G.mode.drag ? `${Math.round(G.dist)} м из ${DRAG_M[G.lenKm]}` : `${(G.dist / 1000).toFixed(2)} км${G.finite ? ` из ${G.lenKm}` : ''}`}${isPlaceMode(G.mode) && !G.online ? ` · обгонов: ${G.overtakes}` : ''}${placeStr}`);
   const rec = records[recKey(G.mode.id, W.map.id, G.lenKm)];
   const timeRec = byTime(G.mode.id, G.lenKm);
   const gd = ghostDelta(), gEl = $('hud-ghost');
@@ -1286,7 +1503,7 @@ function renderSetup() {
   const fieldSel = !!MAPS[sel.map].field;
   $('mode-cards').innerHTML = (fieldSel ? `<div class="card sel"><b>Полигон</b><small>На полигоне нет трассы: свободная езда без таймера, очки за дрифт.</small></div>` : '') + MODES.map((m, i) => `<div class="card ${i === sel.mode && !fieldSel ? 'sel' : ''}" ${fieldSel ? 'style="opacity:.4"' : ''} data-mode="${i}"><b>${m.name}</b><small>${m.desc}</small></div>`).join('');
   $('map-cards').innerHTML = MAPS.map((m, i) => {
-    const len = m.field ? 0 : sel.len;
+    const len = m.field ? 0 : modeLen(MODES[sel.mode], sel.len);
     const mid = m.field ? 'field' : MODES[sel.mode].id;
     const rec = records[recKey(mid, m.id, len)];
     const recTxt = rec ? (byTime(mid, len) ? (rec.time ? fmtTime(rec.time) : '') : rec.score.toLocaleString('ru-RU')) : '';
@@ -1307,7 +1524,7 @@ function renderSetup() {
 function renderSetupGhost(fieldSel) {
   const box = $('setup-ghost');
   if (fieldSel) { box.innerHTML = ''; return; }
-  const key = ghostKeyFor(MODES[sel.mode].id, MAPS[sel.map].id, sel.len);
+  const key = ghostKeyFor(MODES[sel.mode].id, MAPS[sel.map].id, modeLen(MODES[sel.mode], sel.len));
   const g = GH.hasGhost(key) ? GH.loadGhost(key) : null;
   if (!g) { box.innerHTML = '<span>👻 Поставь рекорд здесь — появится призрак твоего лучшего заезда.</span>'; return; }
   const res = g.finished && g.time && byTime(g.mode, g.len) ? fmtTime(g.time) : `${(g.score || 0).toLocaleString('ru-RU')} очк.`;
@@ -1333,6 +1550,18 @@ function renderSetupOpts(fieldSel) {
       if (sel.fieldMode === el.dataset.fm) return;
       sel.fieldMode = el.dataset.fm; saveSel(); audio.click(); buildWorld(sel.map, 7); renderSetup();
     }));
+  } else if (MODES[sel.mode].drag) {
+    // драг: дистанция и обязательная ручная коробка
+    $('opts-title').textContent = 'Дистанция драга';
+    const cur = DRAG_M[sel.dragLen] ? sel.dragLen : 1;
+    box.innerHTML = `<div class="row wrap">${Object.entries(DRAG_M).map(([k, m]) => `<button class="btn small ${+k === cur ? 'accent' : ''}" data-drag="${k}">${m} м${+k === 1 ? ' (¼ мили)' : +k === 2 ? ' (½ мили)' : ' (миля)'}</button>`).join('')}</div>
+      <small class="len-hint">Прямая один на один. Старт по светофору: жми газ на 🟢. Переключай передачи сам (E / ▲), когда лампа станет зелёной.</small>
+      ${settings.manual ? '<small class="len-hint">✓ Ручная коробка включена.</small>' : '<div class="drag-need">🔒 Драг доступен только с <b>ручной коробкой передач</b>. <button class="btn small accent" id="drag-manual">Включить ручную коробку</button></div>'}`;
+    box.querySelectorAll('[data-drag]').forEach((b) => b.addEventListener('click', () => { audio.click(); sel.dragLen = +b.dataset.drag; saveSel(); renderSetup(); }));
+    if ($('drag-manual')) $('drag-manual').addEventListener('click', () => { audio.click(); settings.manual = true; saveSettings(); applyManualClass(); renderSetup(); });
+  } else if (MODES[sel.mode].id === 'attack') {
+    $('opts-title').textContent = 'Длина трассы';
+    box.innerHTML = '<small class="len-hint">Тайм-атак идёт на бесконечной трассе: держись, пока хватает времени. Чем быстрее едешь между чекпоинтами, тем больше секунд получаешь.</small>';
   } else {
     $('opts-title').textContent = 'Длина трассы';
     const inf = !sel.len;
@@ -1342,6 +1571,7 @@ function renderSetupOpts(fieldSel) {
       <div class="len-val" id="len-val">${inf ? '∞' : v + ' км'}</div>
       <button class="btn small ${inf ? 'accent' : ''}" id="len-inf">∞ Бесконечная</button>
     </div>
+    ${MODES[sel.mode].hill && inf ? '<small class="len-hint">⛰ Король горы всегда с финишем: при «бесконечной» длине спуск будет 5 км.</small>' : ''}
     <small class="len-hint">${inf ? 'Бесконечная трасса: едешь, пока не выйдет время (в Гонке и Дрифте) или сколько хочешь (Свободная езда).' : 'В конце трассы — финиш. Таймер считает время заезда, в Гонке важно место среди соперников.'}</small>`;
     const rng = $('len-range');
     rng.addEventListener('input', () => { sel.len = +rng.value; $('len-val').textContent = sel.len + ' км'; rng.classList.remove('off'); $('len-inf').classList.remove('accent'); });
@@ -1578,7 +1808,7 @@ function renderRecords() {
     for (const e of items.sort(cmp)) {
       const val = e.timeRec ? (e.r.time ? fmtTime(e.r.time) : '—') : `${e.r.score.toLocaleString('ru-RU')} очк.`;
       const sub = [e.r.dist ? `${(e.r.dist / 1000).toFixed(1)} км` : '', e.r.maxSpeed ? speedStr(e.r.maxSpeed) : ''].filter(Boolean).join(' · ');
-      html += `<tr><td>${e.map.name}<small>${e.mode.name}</small></td><td>${e.map.field ? '—' : e.len ? e.len + ' км' : '∞'}</td><td>${e.car.name}<span class="cls cls-${carClass(e.car)}">${carClass(e.car)}</span></td><td><b>${val}</b>${sub ? `<small>${sub}</small>` : ''}</td><td><small>${e.r.date || ''}</small></td></tr>`;
+      html += `<tr><td>${e.map.name}<small>${e.mode.name}</small></td><td>${e.map.field ? '—' : lenLabel(e.mode.id, e.len)}</td><td>${e.car.name}<span class="cls cls-${carClass(e.car)}">${carClass(e.car)}</span></td><td><b>${val}</b>${sub ? `<small>${sub}</small>` : ''}</td><td><small>${e.r.date || ''}</small></td></tr>`;
     }
   }
   $('records-table').innerHTML = html + '</table>';
@@ -1611,7 +1841,10 @@ function toggleFullscreen() {
   } catch (e) { /* браузер не поддерживает */ }
 }
 for (const b of document.querySelectorAll('.btn-fs')) b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); toggleFullscreen(); });
-$('set-manual').addEventListener('change', (e) => { settings.manual = e.target.checked; saveSettings(); });
+$('set-manual').addEventListener('change', (e) => { settings.manual = e.target.checked; saveSettings(); applyManualClass(); });
+// кнопки передач на телефоне видны только с ручной коробкой
+function applyManualClass() { document.body.classList.toggle('manual', !!settings.manual); }
+applyManualClass();
 $('set-quality').addEventListener('change', (e) => { settings.quality = +e.target.value; saveSettings(); buildWorld(sel.map, 7); });
 $('set-camera').addEventListener('change', (e) => { settings.camera = +e.target.value; saveSettings(); });
 $('set-units').addEventListener('change', (e) => { settings.units = e.target.value; saveSettings(); });
@@ -2094,7 +2327,7 @@ async function openPlayer(id) {
         ['Поражения', fmtN(p.losses)], ['Процент побед', p.winRate != null ? Math.round(p.winRate * (p.winRate <= 1 ? 100 : 1)) + '%' : '—'], ['Лучший дрифт', fmtN(s.bestDrift)], ['Макс. скорость', speedStr(s.maxSpeed || 0)],
         ['Дистанция', ((s.distance || 0) / 1000).toFixed(1) + ' км'], ['Машины', `${s.carsOwned ?? '—'} / ${s.carsTotal ?? CARS.length}`], ['Достижения', `${s.achievements ?? '—'} / ${s.achievementsTotal ?? PG.ACHIEVEMENTS.length}`], ['Заезды (всего)', fmtN(s.races)]])}
       ${ms.length ? `<h3>Онлайн по режимам</h3><table class="ptable"><tr><th>Режим</th><th>Матчи</th><th>Победы</th><th>Лучший</th></tr>${ms.map(([k, v]) => `<tr><td>${MODE_NAME(k)}</td><td>${v.matches ?? v.races ?? 0}</td><td>${v.wins ?? 0}</td><td>${fmtN(v.best)}</td></tr>`).join('')}</table>` : ''}
-      ${(p.records || []).length ? `<h3>Лучшие результаты</h3><table class="ptable"><tr><th>Режим</th><th>Карта</th><th>Длина</th><th>Результат</th></tr>${p.records.slice(0, 12).map((r) => `<tr><td>${MODE_NAME(r.mode)}</td><td>${escapeHtml(MAP_NAME(r.map))}</td><td>${r.len ? r.len + ' км' : '∞'}</td><td>${r.time && byTime(r.mode, r.len) ? fmtTime(r.time) : fmtN(r.score)}</td></tr>`).join('')}</table>` : ''}
+      ${(p.records || []).length ? `<h3>Лучшие результаты</h3><table class="ptable"><tr><th>Режим</th><th>Карта</th><th>Длина</th><th>Результат</th></tr>${p.records.slice(0, 12).map((r) => `<tr><td>${MODE_NAME(r.mode)}</td><td>${escapeHtml(MAP_NAME(r.map))}</td><td>${lenLabel(r.mode, r.len)}</td><td>${r.time && byTime(r.mode, r.len) ? fmtTime(r.time) : fmtN(r.score)}</td></tr>`).join('')}</table>` : ''}
       ${hist.length ? `<h3>Последние онлайн-заезды</h3><table class="ptable"><tr><th>Режим</th><th>Место</th><th>Рейтинг</th></tr>${hist.slice(0, 10).map((h) => `<tr><td>${MODE_NAME(h.mode)}</td><td>${h.place}/${h.of}</td><td>${h.ratingDelta >= 0 ? '+' : ''}${h.ratingDelta} → ${h.rating}</td></tr>`).join('')}</table>` : ''}`;
   } catch (e) { $('pv-body').innerHTML = `<p class="hint">⚠ ${escapeHtml(e.message)}</p>`; }
 }
@@ -2105,7 +2338,7 @@ const RP = { pl: null, model: null, t: 0, speed: 1, paused: false, from: 'over',
 const RP_CAMS = ['Камера: сзади', 'Камера: кино', 'Камера: ТВ-трансляция', 'Камера: сверху'];
 function replayWorld(rec) {
   const mi = Math.max(0, MAPS.findIndex((m) => m.id === rec.map));
-  buildWorld(mi, rec.seed, { finishIdx: finishIdxFor(rec.len) });
+  buildWorld(mi, rec.seed, { finishIdx: finishIdxFor(rec.len, rec.mode), profile: rec.mode === 'drag' ? 'drag' : rec.mode === 'hill' ? 'hill' : '' });
   W.player.model.root.visible = false; // машина из записи может отличаться от выбранной
   RP.model = buildGhostCar(rec, 1);
 }
@@ -2121,7 +2354,7 @@ function startReplay(rec, from) {
   $('countdown').textContent = '';
   viewShift = { x: 0, y: 0 }; updateViewOffset(); camera.updateProjectionMatrix();
   $('rp-seek').max = RP.pl.duration.toFixed(2);
-  $('rp-title').textContent = `🎬 Повтор · ${MAP_NAME(rec.map)} · ${MODE_NAME(rec.mode)}${rec.len ? ` · ${rec.len} км` : ''} · ${(CARS.find((c) => c.id === rec.car) || CARS[0]).name}`;
+  $('rp-title').textContent = `🎬 Повтор · ${MAP_NAME(rec.map)} · ${MODE_NAME(rec.mode)}${rec.len ? ` · ${lenLabel(rec.mode, rec.len)}` : ''} · ${(CARS.find((c) => c.id === rec.car) || CARS[0]).name}`;
   $('replay-bar').classList.remove('hidden');
   renderReplayBar();
   updateReplay(0, true);
